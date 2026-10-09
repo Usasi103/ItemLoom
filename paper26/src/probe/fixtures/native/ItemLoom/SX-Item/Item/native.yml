@@ -1,0 +1,5 @@
+ILProbeNativeSX:
+  ID: PAPER
+  Name: 'SX <l:quality>'
+  Random:
+    quality: common

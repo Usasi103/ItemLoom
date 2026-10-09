@@ -1,0 +1,13 @@
+ILBagVanilla:
+  Drops:
+  - diamond 2 1
+  - emerald 64 0
+ILBagNested:
+  Drops:
+  - ILBagVanilla 2 1
+ILBagItemLoom:
+  Drops:
+  - itemloom{id=ILProbeNativeStone;quality=rare} 3 1
+ILBagBad:
+  Drops:
+  - exp 5 1

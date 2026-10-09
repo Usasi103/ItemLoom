@@ -1,0 +1,156 @@
+{
+  "project": "Keystone",
+  "version": "0.3.6",
+  "revision": "3554cf5502ff4b52532511c396d5ef5c9bd29791",
+  "selection": "Transitive Java class closure used by the item engine. Runtime code is unchanged; one Javadoc permission example is anonymized.",
+  "sources": {
+    "src/main/java/dev/keystone/Keystone.java": {
+      "upstreamSha256": "ba1338c54f968a13b9e2f98be734199ccd11b5597bc9ec73964c638eb980f8e5",
+      "sha256": "ba1338c54f968a13b9e2f98be734199ccd11b5597bc9ec73964c638eb980f8e5"
+    },
+    "src/main/java/dev/keystone/command/ArgumentNode.java": {
+      "upstreamSha256": "206eb2166bd3c2966234dcabc758781fbc28bf669bbbe731d046121af34331ec",
+      "sha256": "206eb2166bd3c2966234dcabc758781fbc28bf669bbbe731d046121af34331ec"
+    },
+    "src/main/java/dev/keystone/command/CommandAction.java": {
+      "upstreamSha256": "79cdeb0c17e66fdb2624004d957fcacc89f7d9601a33a7ef100fba769ae108ef",
+      "sha256": "79cdeb0c17e66fdb2624004d957fcacc89f7d9601a33a7ef100fba769ae108ef"
+    },
+    "src/main/java/dev/keystone/command/CommandBuilder.java": {
+      "upstreamSha256": "65a945f4f7981ca6c94f2aa8a2d2fb9c134924357557d48a1f02c1b3043de6e9",
+      "sha256": "65a945f4f7981ca6c94f2aa8a2d2fb9c134924357557d48a1f02c1b3043de6e9"
+    },
+    "src/main/java/dev/keystone/command/CommandContext.java": {
+      "upstreamSha256": "3e19604adb9bf0316226b7aebc0a79c728332668fc55c38a2f1c07e072a77941",
+      "sha256": "3e19604adb9bf0316226b7aebc0a79c728332668fc55c38a2f1c07e072a77941"
+    },
+    "src/main/java/dev/keystone/command/CommandFeedback.java": {
+      "upstreamSha256": "30bb783db8864cf37a2a6b7d9c6907ffafb283c51f20190d49653937c94e514a",
+      "sha256": "30bb783db8864cf37a2a6b7d9c6907ffafb283c51f20190d49653937c94e514a"
+    },
+    "src/main/java/dev/keystone/command/CommandHelp.java": {
+      "upstreamSha256": "505334e871e3adcb7b64b304055e0ccfbbdb41d824ba346dfcb26cc0dd6a6db2",
+      "sha256": "505334e871e3adcb7b64b304055e0ccfbbdb41d824ba346dfcb26cc0dd6a6db2"
+    },
+    "src/main/java/dev/keystone/command/CommandNode.java": {
+      "upstreamSha256": "803c1758c428dd0ad0b44efecbd95539d49a9ec3ec560dca89daf3d2424d25b7",
+      "sha256": "803c1758c428dd0ad0b44efecbd95539d49a9ec3ec560dca89daf3d2424d25b7"
+    },
+    "src/main/java/dev/keystone/command/CommandRegistry.java": {
+      "upstreamSha256": "5407f12cae5e48be0669e53d00ca92c3808aba07d9e1eae668c7f636c7eac718",
+      "sha256": "5407f12cae5e48be0669e53d00ca92c3808aba07d9e1eae668c7f636c7eac718"
+    },
+    "src/main/java/dev/keystone/command/CommandTokens.java": {
+      "upstreamSha256": "d76892d9f41033b2209cf9836d7655f6022ad4fc31e39c757355390803429ee5",
+      "sha256": "d76892d9f41033b2209cf9836d7655f6022ad4fc31e39c757355390803429ee5"
+    },
+    "src/main/java/dev/keystone/command/LiteralNode.java": {
+      "upstreamSha256": "79b6b2c5d9e9c96101c98e4f0cbe79bf06bde3b6ef157da8815f08adeafa8d6a",
+      "sha256": "79b6b2c5d9e9c96101c98e4f0cbe79bf06bde3b6ef157da8815f08adeafa8d6a"
+    },
+    "src/main/java/dev/keystone/command/Restriction.java": {
+      "upstreamSha256": "a0243557e6a85ef0175a6bd6e0281b577a1258831f711144d36a397a41d0fa00",
+      "sha256": "a0243557e6a85ef0175a6bd6e0281b577a1258831f711144d36a397a41d0fa00"
+    },
+    "src/main/java/dev/keystone/command/RootCommand.java": {
+      "upstreamSha256": "34cdff54914b1c3da0bcf90653c05d34eb8e5f1399a70f883d16ea87f75edf90",
+      "sha256": "34cdff54914b1c3da0bcf90653c05d34eb8e5f1399a70f883d16ea87f75edf90"
+    },
+    "src/main/java/dev/keystone/command/Suggester.java": {
+      "upstreamSha256": "82e591bd883dd910978612e7e3092fc9712c508b7041af672dd3f3a6dad9bff4",
+      "sha256": "82e591bd883dd910978612e7e3092fc9712c508b7041af672dd3f3a6dad9bff4"
+    },
+    "src/main/java/dev/keystone/config/ConfigFile.java": {
+      "upstreamSha256": "cd31e210f46cb7848e67d2d0f432535c543608837474fc31b6cc0598c46fc64b",
+      "sha256": "cd31e210f46cb7848e67d2d0f432535c543608837474fc31b6cc0598c46fc64b"
+    },
+    "src/main/java/dev/keystone/config/ConfigProblems.java": {
+      "upstreamSha256": "6f7968972681f9e912ca9f612e5e4594c2c6b3f5229a7beda8d168d5792e8e94",
+      "sha256": "6405225f68bd0bdf6ac94eaf754d0a39f30334ae734c16cc0a27796f7e19cee6"
+    },
+    "src/main/java/dev/keystone/config/LenientSection.java": {
+      "upstreamSha256": "9f5571d938b4ca191dd89e64809f16752afcf76c656dde53307437aae61f56fd",
+      "sha256": "9f5571d938b4ca191dd89e64809f16752afcf76c656dde53307437aae61f56fd"
+    },
+    "src/main/java/dev/keystone/config/LineBreaks.java": {
+      "upstreamSha256": "9cecd005df5971becc0b8c42eea17e0703f31c5865e1bcdfb37bc5c5536a8aeb",
+      "sha256": "9cecd005df5971becc0b8c42eea17e0703f31c5865e1bcdfb37bc5c5536a8aeb"
+    },
+    "src/main/java/dev/keystone/config/LoadProblem.java": {
+      "upstreamSha256": "286a495b42560689fabf84c682e482f86b053bc196e8a6885718604436ce7abe",
+      "sha256": "286a495b42560689fabf84c682e482f86b053bc196e8a6885718604436ce7abe"
+    },
+    "src/main/java/dev/keystone/config/ReloadTransaction.java": {
+      "upstreamSha256": "1938fe521c887fb969eaaaf29d3efadb5a81c6ada68325b48c5e9dd8471f71c4",
+      "sha256": "1938fe521c887fb969eaaaf29d3efadb5a81c6ada68325b48c5e9dd8471f71c4"
+    },
+    "src/main/java/dev/keystone/config/UpgradePolicy.java": {
+      "upstreamSha256": "2b42b5c0832a9d1a53e85a2aa75d700c1048db0cd1b33b88ebd88e25d5610ba4",
+      "sha256": "2b42b5c0832a9d1a53e85a2aa75d700c1048db0cd1b33b88ebd88e25d5610ba4"
+    },
+    "src/main/java/dev/keystone/config/UpgradeReport.java": {
+      "upstreamSha256": "e2d992448b967e780719ac74ee63a8a5f5e7267256c0a32e6bbe5d050e1521fa",
+      "sha256": "e2d992448b967e780719ac74ee63a8a5f5e7267256c0a32e6bbe5d050e1521fa"
+    },
+    "src/main/java/dev/keystone/config/YamlPatch.java": {
+      "upstreamSha256": "4c738ef99a33c8d44fca986836b88596a5b171f839e72a137821b76ec716fea1",
+      "sha256": "4c738ef99a33c8d44fca986836b88596a5b171f839e72a137821b76ec716fea1"
+    },
+    "src/main/java/dev/keystone/config/YamlUpgrade.java": {
+      "upstreamSha256": "0d58bd99b0288eb566661356c38d30cf845a5e4a29247367b8386d5987ae1821",
+      "sha256": "0d58bd99b0288eb566661356c38d30cf845a5e4a29247367b8386d5987ae1821"
+    },
+    "src/main/java/dev/keystone/event/Events.java": {
+      "upstreamSha256": "f612ecec5f360c119191255c5bd416ae341060c117144a9a38a010bb2eac055f",
+      "sha256": "f612ecec5f360c119191255c5bd416ae341060c117144a9a38a010bb2eac055f"
+    },
+    "src/main/java/dev/keystone/lang/Lang.java": {
+      "upstreamSha256": "00cc5b0feafd6a65faeb017e6bdd9ede5f16a2eff746ff65680d2363a381af89",
+      "sha256": "00cc5b0feafd6a65faeb017e6bdd9ede5f16a2eff746ff65680d2363a381af89"
+    },
+    "src/main/java/dev/keystone/lang/LangNode.java": {
+      "upstreamSha256": "a1b77e39a840011936709414e9d83193482e5ac90b2eb3ca35a3597324b9721a",
+      "sha256": "a1b77e39a840011936709414e9d83193482e5ac90b2eb3ca35a3597324b9721a"
+    },
+    "src/main/java/dev/keystone/lang/LangTransfer.java": {
+      "upstreamSha256": "d3414e1789da87bbf3b8c8fe8126aaf0644ae3b90994ec0770c4d153bdfe0770",
+      "sha256": "d3414e1789da87bbf3b8c8fe8126aaf0644ae3b90994ec0770c4d153bdfe0770"
+    },
+    "src/main/java/dev/keystone/log/Log.java": {
+      "upstreamSha256": "0c69df0acba2df13ff883c857ad19afdaf96ec48ca3aa394ec4f2ded81959315",
+      "sha256": "0c69df0acba2df13ff883c857ad19afdaf96ec48ca3aa394ec4f2ded81959315"
+    },
+    "src/main/java/dev/keystone/storage/FileBackup.java": {
+      "upstreamSha256": "e7b74f1a86406be4e0cec15d01a2900de3c22c40fd5bcba28deb3a6b733ae858",
+      "sha256": "e7b74f1a86406be4e0cec15d01a2900de3c22c40fd5bcba28deb3a6b733ae858"
+    },
+    "src/main/java/dev/keystone/storage/StorageWriter.java": {
+      "upstreamSha256": "9e3da053130525368a6e2d8fb74f5d3c726448a8b13a1cc0a2c99fb0c080c414",
+      "sha256": "9e3da053130525368a6e2d8fb74f5d3c726448a8b13a1cc0a2c99fb0c080c414"
+    },
+    "src/main/java/dev/keystone/storage/WriteGuard.java": {
+      "upstreamSha256": "85928bd1a5a5af97a350b3eddb5a2114311d4ad9c0dd42cde44fadb30970ab3a",
+      "sha256": "85928bd1a5a5af97a350b3eddb5a2114311d4ad9c0dd42cde44fadb30970ab3a"
+    },
+    "src/main/java/dev/keystone/task/Task.java": {
+      "upstreamSha256": "a16abae8c916cf4b64fcdfc4da9fbf367f4813043f85b082567e0ffc9718b5cf",
+      "sha256": "a16abae8c916cf4b64fcdfc4da9fbf367f4813043f85b082567e0ffc9718b5cf"
+    },
+    "src/main/java/dev/keystone/task/Tasks.java": {
+      "upstreamSha256": "f0b914b0478b51d6e143387e084a992378c6d9e5232701e93991fb954386c9e5",
+      "sha256": "f0b914b0478b51d6e143387e084a992378c6d9e5232701e93991fb954386c9e5"
+    },
+    "src/main/java/dev/keystone/ui/SignInput.java": {
+      "upstreamSha256": "d445c914c85b817c195a04d9b773fe9bcf02a94ad021ea775e63404af8b6fee3",
+      "sha256": "d445c914c85b817c195a04d9b773fe9bcf02a94ad021ea775e63404af8b6fee3"
+    },
+    "src/main/java/dev/keystone/ui/SignPrompts.java": {
+      "upstreamSha256": "5797cac3ae967efa6b8d82e2b869ff8142435f80be4d97920f85c7b0b88d1bf7",
+      "sha256": "5797cac3ae967efa6b8d82e2b869ff8142435f80be4d97920f85c7b0b88d1bf7"
+    },
+    "src/main/java/dev/keystone/util/Texts.java": {
+      "upstreamSha256": "687abf82a27e3eaa4d83331f98a1f17a47b4188e4882a4454633ddd0ff49aebe",
+      "sha256": "687abf82a27e3eaa4d83331f98a1f17a47b4188e4882a4454633ddd0ff49aebe"
+    }
+  }
+}

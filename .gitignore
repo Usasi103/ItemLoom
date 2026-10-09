@@ -1,0 +1,12 @@
+.gradle/
+**/build/
+out/
+dist/
+*.log
+.idea/
+*.iml
+__pycache__/
+private-assets/
+integrations/loot-bags/resourcepack/
+integrations/loot-bags/ItemLoom/
+tools/prepare_loot_bags.py

@@ -1,0 +1,10 @@
+name: ItemLoom
+main: dev.itemloom.paper.ItemLoomPlugin
+version: '${version}'
+api-version: '26.2'
+authors: [ItemLoom]
+description: Independent item engine with an NI configuration frontend
+softdepend: [PlaceholderAPI, MythicMobs, Vault, MagicGem, ItemsAdder, Oraxen]
+permissions:
+  itemloom.admin:
+    default: op

@@ -1,0 +1,9 @@
+ILProbeNativeMob:
+  Type: ZOMBIE
+  Display: 'Native Probe'
+  Options:
+    NoAI: true
+    Despawn: true
+    PreventSunburn: true
+  Equipment:
+  - itemloom{id=ILProbeNativeSword} HAND

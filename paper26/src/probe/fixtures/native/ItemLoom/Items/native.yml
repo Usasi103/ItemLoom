@@ -1,0 +1,12 @@
+ILProbeNativeStone:
+  material: STONE
+  name: 'Native <quality>'
+  sections:
+    quality: common
+ILProbeNativeSword:
+  material: DIAMOND_SWORD
+  name: 'Native <roll>'
+  sections:
+    roll:
+      type: js
+      path: native.js::roll

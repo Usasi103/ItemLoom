@@ -1,0 +1,9 @@
+name: ItemLoomProbe
+main: dev.itemloom.probe.ItemsProbe
+version: '1.0.0'
+api-version: '26.2'
+depend: [ItemLoom]
+softdepend: [NeigeItems, PlaceholderAPI, MythicMobs]
+commands:
+  ilprobe:
+    permission: itemloom.admin
