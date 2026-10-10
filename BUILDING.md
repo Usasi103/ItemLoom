@@ -42,7 +42,7 @@ outside a deployment server's directory.
 
 ## Dependencies and reproducibility
 
-The build resolves Paper, PlaceholderAPI, Nashorn, ASM, and test dependencies from the
+The build resolves Paper, PlaceholderAPI, ItemBridge 1.0.32, Nashorn, ASM, and test dependencies from the
 repositories declared in Gradle. The required Keystone source subset is included in
 `vendor/keystone`; a private repository or prebuilt local Keystone JAR is not required.
 NI and SX-Item are not runtime dependencies. See [NOTICE](NOTICE.md) for origins and licenses.

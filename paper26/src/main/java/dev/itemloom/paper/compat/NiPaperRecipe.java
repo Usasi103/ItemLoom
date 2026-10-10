@@ -22,6 +22,9 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.inventory.ItemStack;
 import dev.itemloom.api.ItemContext;
+import dev.itemloom.paper.integration.ExternalItemMaterial;
+import dev.itemloom.paper.integration.OptionalItemSources;
+import org.bukkit.entity.Player;
 
 /** The frontend compiles an NI definition into the independent engine's recipe contract. */
 public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
@@ -48,6 +51,9 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
     private final NiItemData data;
     private final int definitionHash;
     private final Consumer<String> warning;
+    private final NiConfig fixed;
+    private final String staticExternal;
+    private final OptionalItemSources itemSources;
 
     private record LegacyView(ConfigurationSection config, ConfigurationSection sections) {}
 
@@ -64,6 +70,17 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
             NiEvaluation.Host host,
             Clock clock,
             Consumer<String> warning) {
+        this(definition, nodes, scripts, host, clock, warning, new OptionalItemSources());
+    }
+
+    public NiPaperRecipe(
+            NiCompiledItem definition,
+            NiNodes nodes,
+            NiScripts scripts,
+            NiEvaluation.Host host,
+            Clock clock,
+            Consumer<String> warning,
+            OptionalItemSources itemSources) {
         this.definition = definition;
         NiConfig displayConfig = definition.definition().section("client_bound_data");
         display = displayConfig == null ? null : new NiDisplayTemplate(displayConfig);
@@ -71,10 +88,13 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
         this.scripts = scripts;
         this.host = host;
         this.warning = warning;
+        this.itemSources = itemSources;
         data = new NiItemData(clock);
-        NiConfig fixed = definition.definition().section("static");
-        staticMaterial =
-                fixed != null && NiItemAppearance.material(fixed.string("material")) != null;
+        fixed = definition.definition().section("static");
+        String fixedMaterial = fixed == null ? null : fixed.string("material");
+        staticExternal = ExternalItemMaterial.isExternal(fixedMaterial) ? fixedMaterial : null;
+        if (staticExternal != null) ExternalItemMaterial.parse(staticExternal);
+        staticMaterial = staticExternal != null || NiItemAppearance.material(fixedMaterial) != null;
         prototype =
                 new NiItemAppearance(fixed, warning)
                         .apply(new net.minecraft.world.item.ItemStack(Items.STONE));
@@ -148,17 +168,24 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
                         scripts,
                         host);
         NiConfig expanded = definition.expand(evaluation);
-        Material material = NiItemAppearance.material(expanded.string("material"));
-        if (material == null && !staticMaterial)
+        String materialName = expanded.string("material");
+        boolean external = ExternalItemMaterial.isExternal(materialName);
+        Material material = NiItemAppearance.material(materialName);
+        if (!external && material == null && !staticMaterial)
             throw new InvalidMaterialException(
                     definition.id() + ": invalid material: " + expanded.string("material"));
-        if (prototype.isEmpty())
+        boolean externalBase = external || staticExternal != null;
+        if (!externalBase && prototype.isEmpty())
             return new Generated(
                     CraftItemStack.asCraftMirror(prototype.copy()),
                     expanded,
                     this::legacySections,
                     false);
-        var result = appearance(expanded);
+        var result =
+                externalBase
+                        ? externalAppearance(
+                                expanded, external ? materialName : staticExternal, context)
+                        : appearance(expanded);
         if (result.isEmpty())
             return new Generated(
                     CraftItemStack.asCraftMirror(result), expanded, this::legacySections, false);
@@ -169,9 +196,37 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
                         new ItemIdentity(definition.id(), context.savedRolls()),
                         definitionHash);
         result.set(DataComponents.CUSTOM_DATA, CustomData.of(custom));
-        result.setCount(1);
+        if (!externalBase) result.setCount(1);
         return new Generated(
                 CraftItemStack.asCraftMirror(result), expanded, this::legacySections, true);
+    }
+
+    /** Provider values can depend on a viewer or a roll, even for a constant material string. */
+    private net.minecraft.world.item.ItemStack externalAppearance(
+            NiConfig expanded, String material, GenerationContext context) {
+        var viewer = context.get(ItemContext.VIEWER);
+        var result =
+                CraftItemStack.asNMSCopy(
+                        itemSources.material(
+                                material,
+                                viewer instanceof Player player ? player : null,
+                                Map.of()));
+        // This reserved envelope belongs to the new recipe, even if an external provider
+        // returned a previously generated ItemLoom item. Other custom data stays intact.
+        CompoundTag externalData = customData(result);
+        if (externalData.contains(dev.itemloom.paper.nms.ItemStateCodec.KEY)) {
+            externalData = externalData.copy();
+            externalData.remove(dev.itemloom.paper.nms.ItemStateCodec.KEY);
+            result.set(DataComponents.CUSTOM_DATA, CustomData.of(externalData));
+        }
+        // The selected external material takes precedence over a static vanilla material.
+        result = new NiItemAppearance(fixed, warning, true).apply(result, false);
+        if (fixed != null && !result.isEmpty()) {
+            result.set(
+                    DataComponents.CUSTOM_DATA,
+                    CustomData.of(data.apply(customData(result), fixed, null, definitionHash)));
+        }
+        return new NiItemAppearance(expanded, warning, true).apply(result);
     }
 
     /**

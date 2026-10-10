@@ -28,6 +28,7 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
+import dev.itemloom.paper.integration.OptionalItemSources;
 
 /** Revision-owned SX frontend. Construction prepares recipes; no live catalog is mutated. */
 public final class SxCatalog implements AutoCloseable {
@@ -35,6 +36,7 @@ public final class SxCatalog implements AutoCloseable {
             java.util.regex.Pattern.compile("%([^%]+)%");
     private final SxRepository.Input input;
     private final BiFunction<Object, String, String> placeholders;
+    private final OptionalItemSources itemSources;
     private final Map<String, SxPaperRecipe> recipes = new LinkedHashMap<>();
     private final Listener scriptListener = new Listener() {};
     private final ItemStateCodec state = new ItemStateCodec();
@@ -47,8 +49,17 @@ public final class SxCatalog implements AutoCloseable {
             SxRepository.Input input,
             JavaPlugin plugin,
             BiFunction<Object, String, String> placeholders) {
+        this(input, plugin, placeholders, new OptionalItemSources());
+    }
+
+    public SxCatalog(
+            SxRepository.Input input,
+            JavaPlugin plugin,
+            BiFunction<Object, String, String> placeholders,
+            OptionalItemSources itemSources) {
         this.input = input;
         this.placeholders = placeholders;
+        this.itemSources = itemSources;
         try {
             for (String id : input.items().keySet()) resolve(id, new java.util.LinkedHashSet<>());
             // Validate global formatting before publication, even when no item uses it yet.
@@ -80,7 +91,7 @@ public final class SxCatalog implements AutoCloseable {
             throw new IllegalArgumentException("Unknown SX alias target: " + id);
         SxPaperRecipe recipe =
                 definition.alias() == null
-                        ? new SxPaperRecipe(definition, input.settings())
+                        ? new SxPaperRecipe(definition, input.settings(), itemSources)
                         : resolve(definition.alias(), path);
         recipes.put(id, recipe);
         updates |= recipe.update;

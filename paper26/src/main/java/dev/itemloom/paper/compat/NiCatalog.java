@@ -468,8 +468,8 @@ public final class NiCatalog implements AutoCloseable {
                         scripts,
                         host,
                         Clock.systemUTC(),
-                        message ->
-                                logger.warning(source + " / " + origin.getId() + ": " + message));
+                        message -> logger.warning(source + " / " + origin.getId() + ": " + message),
+                        itemSources);
         return new LegacyItemGenerator(items, origin, recipe, postStep);
     }
 

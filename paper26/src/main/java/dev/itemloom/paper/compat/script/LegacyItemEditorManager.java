@@ -7,14 +7,12 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
@@ -65,7 +63,6 @@ public final class LegacyItemEditorManager {
     }
 
     public final LegacyItemEditorManager INSTANCE = this;
-    private static final Pattern GROUP_REFERENCE = Pattern.compile("\\$(\\d+)");
     private final Host host;
     private final HashMap<String, Editor> itemEditors = new HashMap<>();
     private final ArrayList<String> editorNames = new ArrayList<>();
@@ -523,84 +520,26 @@ public final class LegacyItemEditorManager {
                 lore ? DataComponents.LORE : DataComponents.CUSTOM_NAME,
                 meta -> {
                     if (lore ? !meta.hasLore() : !meta.hasDisplayName()) return;
-                    HashMap<String, String> values = stringMap(color(content));
-                    if (values.isEmpty()) return;
-                    if (!lore) {
-                        String result = meta.getDisplayName();
-                        for (var entry : values.entrySet())
-                            result =
-                                    replaceMatches(
-                                                    result,
-                                                    entry.getKey(),
-                                                    entry.getValue(),
-                                                    all,
-                                                    expansion,
-                                                    player,
-                                                    item)
-                                            .text;
-                        meta.setDisplayName(result);
-                        return;
-                    }
-                    List<String> lines = new ArrayList<>();
-                    for (String line : meta.getLore()) {
-                        String result = values.isEmpty() ? line : "";
-                        Iterator<Map.Entry<String, String>> iterator = values.entrySet().iterator();
-                        while (iterator.hasNext()) {
-                            var entry = iterator.next();
-                            Replacement replaced =
-                                    replaceMatches(
-                                            line,
-                                            entry.getKey(),
-                                            entry.getValue(),
-                                            all,
-                                            expansion,
-                                            player,
-                                            item);
-                            result = replaced.text;
-                            if (!all && replaced.matched) iterator.remove();
-                        }
-                        // NI repeats the complete multiline result rather than splitting it.
-                        for (int i = 0, count = result.split("\n", -1).length; i < count; i++)
-                            lines.add(result);
-                    }
-                    meta.setLore(lines);
+                    List<LegacyRegexText.Rule> rules =
+                            stringMap(color(content)).entrySet().stream()
+                                    .map(
+                                            entry ->
+                                                    new LegacyRegexText.Rule(
+                                                            entry.getKey(), entry.getValue()))
+                                    .toList();
+                    if (rules.isEmpty()) return;
+                    java.util.function.UnaryOperator<String> expand =
+                            switch (expansion) {
+                                case "Papi" -> value -> host.papi(player, value);
+                                case "Section" -> value -> host.section(player, item, value);
+                                default -> java.util.function.UnaryOperator.identity();
+                            };
+                    if (lore)
+                        meta.setLore(LegacyRegexText.lore(meta.getLore(), rules, all, expand));
+                    else
+                        meta.setDisplayName(
+                                LegacyRegexText.name(meta.getDisplayName(), rules, all, expand));
                 });
-    }
-
-    private record Replacement(String text, boolean matched) {}
-
-    private Replacement replaceMatches(
-            String text,
-            String regex,
-            String replacement,
-            boolean all,
-            String expansion,
-            Player player,
-            ItemStack item) {
-        Matcher matcher = Pattern.compile(regex).matcher(text);
-        StringBuilder output = new StringBuilder();
-        boolean matched = false;
-        while (matcher.find()) {
-            if (matched && !all) break;
-            Matcher groups = GROUP_REFERENCE.matcher(replacement);
-            StringBuilder expanded = new StringBuilder();
-            while (groups.find()) {
-                int index = Integer.parseInt(groups.group(1));
-                String value =
-                        index <= matcher.groupCount()
-                                ? Objects.toString(matcher.group(index), "")
-                                : groups.group();
-                groups.appendReplacement(expanded, Matcher.quoteReplacement(value));
-            }
-            groups.appendTail(expanded);
-            String value = expanded.toString();
-            if (expansion.equals("Papi")) value = host.papi(player, value);
-            else if (expansion.equals("Section")) value = host.section(player, item, value);
-            matcher.appendReplacement(output, Matcher.quoteReplacement(value));
-            matched = true;
-        }
-        matcher.appendTail(output);
-        return new Replacement(output.toString(), matched);
     }
 
     private static boolean enchantments(ItemStack item, String content, String operation) {

@@ -1,10 +1,8 @@
 package dev.itemloom.compat.sx;
 
 import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
 import java.time.Clock;
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -203,7 +201,7 @@ public final class SxExpressions {
             }
             case "cmp" -> compare(argument);
             case "if" -> conditional(argument);
-            case "when" -> branch(argument);
+            case "when" -> SxBranchTime.branch(argument);
             case "null" -> "";
             case "u" ->
                     (argument.equals("random")
@@ -211,7 +209,7 @@ public final class SxExpressions {
                                     : UUID.nameUUIDFromBytes(
                                             argument.getBytes(StandardCharsets.UTF_8)))
                             .toString();
-            case "t" -> time(argument);
+            case "t" -> SxBranchTime.time(argument, timeFormat, clock);
             case "j" -> script(argument);
             default ->
                     throw new IllegalArgumentException("Unsupported SX expression type: " + kind);
@@ -311,54 +309,6 @@ public final class SxExpressions {
         boolean condition =
                 List.of("true", "1", "yes", "ok").contains(text.substring(0, question).trim());
         return condition ? text.substring(question + 1, colon) : text.substring(colon + 1);
-    }
-
-    private static String branch(String text) {
-        int dollar = text.indexOf('$');
-        if (dollar < 0) return "";
-        String match = text.substring(0, dollar), fallback = "";
-        for (String entry : text.substring(dollar + 1).split("\\|")) {
-            int colon = entry.indexOf(':');
-            if (colon < 0) continue;
-            String key = entry.substring(0, colon), value = entry.substring(colon + 1);
-            if (key.equals(match)) return value;
-            if (key.equals("default") || key.equals("else")) fallback = value;
-        }
-        return fallback;
-    }
-
-    private String time(String text) {
-        Calendar calendar = Calendar.getInstance(java.util.TimeZone.getTimeZone(clock.getZone()));
-        calendar.setTimeInMillis(clock.millis());
-        if (text.matches("[0-9]+"))
-            calendar.setTimeInMillis(
-                    Math.addExact(clock.millis(), Math.multiplyExact(Long.parseLong(text), 1000)));
-        else {
-            int number = 0;
-            for (char ch : text.toCharArray()) {
-                if (ch >= '0' && ch <= '9') {
-                    number = Math.addExact(Math.multiplyExact(number, 10), ch - '0');
-                    continue;
-                }
-                int field =
-                        switch (ch) {
-                            case 'Y', 'y' -> Calendar.YEAR;
-                            case 'M' -> Calendar.MONTH;
-                            case 'D', 'd' -> Calendar.DATE;
-                            case 'H', 'h' -> Calendar.HOUR_OF_DAY;
-                            case 'm' -> Calendar.MINUTE;
-                            case 'S', 's' -> Calendar.SECOND;
-                            default -> -1;
-                        };
-                if (field >= 0) {
-                    calendar.add(field, number);
-                    number = 0;
-                }
-            }
-        }
-        SimpleDateFormat format = new SimpleDateFormat(timeFormat);
-        format.setTimeZone(calendar.getTimeZone());
-        return format.format(calendar.getTime());
     }
 
     private String script(String text) {

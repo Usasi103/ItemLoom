@@ -6,6 +6,8 @@ ItemLoom 是面向 **Paper 26.2 / Java 25** 的开源自定义物品插件。用
 
 物品生成、数据存储与 Java API 独立运行，无需安装 NI 或 SX-Item。项目采用 GPL-3.0，保留上游来源署名，详见 [NOTICE](NOTICE.md)。
 
+可通过内嵌的 [ItemBridge](https://github.com/jhqwqmc/ItemBridge) 使用 CraftEngine 等插件的完整物品作为底稿。ItemLoom 覆盖配置明确指定的字段，保留其他组件、PDC 和自定义标记；外部提供者需要单独安装。参见[外部物品底稿](USAGE.md#外部物品底稿itembridge)。
+
 ## 能做什么
 
 - **定义物品**：材质、名称、Lore、附魔、属性、NBT 与现代物品组件；节点、权重随机、锁定结果和 JavaScript。

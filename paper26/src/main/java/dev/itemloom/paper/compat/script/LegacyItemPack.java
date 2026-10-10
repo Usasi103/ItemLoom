@@ -2,7 +2,6 @@ package dev.itemloom.paper.compat.script;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -193,62 +192,16 @@ public final class LegacyItemPack {
             if (maximum != null && maximum > 0 && maximum >= lines.size()) maximum = null;
             remember(parsed, lines, minimum, maximum);
         }
-        ArrayList<ItemStack> result = new ArrayList<>();
-        if (maximum != null && maximum <= 0) return result;
-        if (minimum == null) {
-            int successes = 0;
-            for (String raw : lines)
-                for (String line : raw.split("\n", -1)) {
-                    if (budget != null) budget.work(1);
-                    var generated = new ItemInfo(owner, line).getItemStacks(player, budget);
-                    if (maximum == null) retain(result, generated, budget);
-                    else if (!generated.isEmpty()) {
-                        // NI evaluates one extra successful entry before stopping at the maximum.
-                        if (successes >= maximum) return result;
-                        retain(result, generated, budget);
-                        successes++;
-                    }
-                }
-            return result;
-        }
-        // NI traverses an identity-keyed HashMap in this branch. Preserving input order
-        // would bias a capped pack toward its first line even when every line succeeds.
-        Map<ItemInfo, Double> candidates = new HashMap<>();
-        for (String raw : lines)
-            for (String line : raw.split("\n", -1)) {
-                if (budget != null) budget.work(1);
-                ItemInfo entry = new ItemInfo(owner, line);
-                if (maximum == null || entry.probability > 0)
-                    candidates.put(entry, entry.probability * 100000);
-            }
-        var remaining = new HashMap<>(candidates);
-        double total = remaining.values().stream().mapToDouble(Double::doubleValue).sum();
-        for (int pick = 0; pick < minimum; pick++) {
-            if (budget != null) budget.work(remaining.size());
-            double point = ThreadLocalRandom.current().nextDouble() * total, weight = 0;
-            ItemInfo selected = null;
-            for (var entry : remaining.entrySet()) {
-                weight += entry.getValue();
-                if (point <= weight) {
-                    selected = entry.getKey();
-                    break;
-                }
-            }
-            if (selected != null) {
-                total -= remaining.remove(selected);
-                selected.probability = 1;
-            }
-        }
-        int successes = 0;
-        for (ItemInfo entry : candidates.keySet()) {
-            var generated = entry.getItemStacks(player, budget);
-            if (maximum == null) retain(result, generated, budget);
-            else if (!generated.isEmpty() && successes < maximum) {
-                retain(result, generated, budget);
-                successes++;
-            }
-        }
-        return result;
+        return PackSelection.select(
+                lines,
+                minimum,
+                maximum,
+                line -> new ItemInfo(owner, line),
+                ItemInfo::getProbability,
+                ItemInfo::setProbability,
+                entry -> entry.getItemStacks(player, budget),
+                additions -> account(additions, budget),
+                budget);
     }
 
     /** Never share Bukkit sections or randomized ItemInfo instances with the next request. */
@@ -267,15 +220,13 @@ public final class LegacyItemPack {
         }
     }
 
-    private static void retain(
-            List<ItemStack> result, List<ItemStack> additions, GenerationBudget budget) {
+    private static void account(List<ItemStack> additions, GenerationBudget budget) {
         if (budget != null)
             for (ItemStack item : additions) {
                 long count = Math.max(0, item.getAmount()),
                         size = Math.max(1, item.getMaxStackSize());
                 budget.retain(count, (count + size - 1) / size);
             }
-        result.addAll(additions);
     }
 
     public static final class ItemInfo {
@@ -404,34 +355,29 @@ public final class LegacyItemPack {
         }
 
         private ArrayList<ItemStack> generate(OfflinePlayer player, GenerationBudget budget) {
-            ArrayList<ItemStack> result = new ArrayList<>();
-            if (owner.catalog().registry().generators().containsKey(id)) {
-                if (random) {
-                    if (budget != null) budget.work(Math.max(0, amount));
-                    for (int i = 0; i < amount; i++) {
-                        ItemStack item =
-                                owner.create(id, player, LegacyItemManager.parseData(data));
-                        if (item != null) result.add(item);
-                    }
+            boolean local = owner.catalog().registry().generators().containsKey(id);
+            java.util.function.Supplier<ItemStack> factory =
+                    local
+                            ? () -> owner.create(id, player, LegacyItemManager.parseData(data))
+                            : () -> owner.catalog().itemSources().getHookedItem(args.getFirst());
+            ArrayList<ItemStack> output = new ArrayList<>();
+            // A native random entry draws separately; all other cases acquire one prototype.
+            int draws = local && random ? Math.max(0, amount) : 1;
+            if (budget != null) budget.work(draws);
+            for (int draw = 0; draw < draws; draw++) {
+                ItemStack item = factory.get();
+                if (item == null) continue;
+                if (local && random) {
+                    output.add(item);
+                } else if (local || random) {
+                    output.addAll(split(item, amount, budget));
                 } else {
-                    if (budget != null) budget.work(1);
-                    ItemStack item = owner.create(id, player, LegacyItemManager.parseData(data));
-                    if (item != null) result.addAll(split(item, amount, budget));
-                }
-            } else {
-                // NI's fallback deliberately uses the original argument even after setId().
-                if (budget != null) budget.work(1);
-                ItemStack item = owner.catalog().itemSources().getHookedItem(args.getFirst());
-                if (item != null) {
-                    if (random) result.addAll(split(item, amount, budget));
-                    else {
-                        if (budget != null) budget.work(Math.max(0, amount));
-                        for (int i = 0; i < amount; i++) result.add(item.clone());
-                    }
+                    if (budget != null) budget.work(Math.max(0, amount));
+                    for (int copy = 0; copy < amount; copy++) output.add(item.clone());
                 }
             }
             owner.ensureActive();
-            return result;
+            return output;
         }
     }
 

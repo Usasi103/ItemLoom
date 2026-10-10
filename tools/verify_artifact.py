@@ -14,9 +14,17 @@ def main():
     parser.add_argument("--forbid-text", action="append", default=[], help="Case-insensitive text forbidden in any JAR entry or payload")
     args = parser.parse_args()
     violations = []
+    # ItemBridge's MIT dependency includes two disabled upstream adapters. These are not
+    # ItemLoom implementations and are never registered or called by our source resolver.
+    bridge_adapters = {
+        'dev/itemloom/internal/itembridge/hook/NeigeItemsProvider.class',
+        'dev/itemloom/internal/itembridge/hook/SXItemProvider.class',
+    }
     with ZipFile(args.jar) as jar:
         names = jar.namelist()
         classes = [name for name in names if name.endswith(".class")]
+        if 'compat-ni/action-library.js' in names:
+            violations.append('Obsolete upstream action helper implementation is still packaged')
         # Runtime capabilities are public; server-owned artwork and deployment inputs are not.
         for name in names:
             if name.startswith(("assets/", "resourcepack/", "integrations/")):
@@ -37,9 +45,9 @@ def main():
                     if dependency in data:
                         violations.append(f"{name}: core dependency on {dependency.decode()}")
             # Aliases deliberately use dotted script names; JVM type descriptors must not.
-            if name.startswith("dev/itemloom/") and b"pers/neige/neigeitems/" in data:
+            if name.startswith("dev/itemloom/") and name not in bridge_adapters and b"pers/neige/neigeitems/" in data:
                 violations.append(f"{name}: direct NI type reference")
-            if name.startswith("dev/itemloom/") and b"github/saukiya/" in data:
+            if name.startswith("dev/itemloom/") and name not in bridge_adapters and b"github/saukiya/" in data:
                 violations.append(f"{name}: direct SX type reference")
         descriptor = jar.read("plugin.yml").decode("utf-8")
         manifest = jar.read("META-INF/MANIFEST.MF").decode("utf-8")
@@ -51,7 +59,11 @@ def main():
             violations.append("Missing script engine")
         if not any(name.startswith("dev/itemloom/internal/keystone/") for name in classes):
             violations.append("Missing relocated Keystone")
-        for notice in ("LICENSE", "NOTICE.md"):
+        if 'dev/itemloom/internal/itembridge/core/BukkitItemBridge.class' not in names:
+            violations.append('Missing relocated ItemBridge')
+        if any(name.startswith('cn/gtemc/itembridge/') for name in names):
+            violations.append('Unrelocated ItemBridge')
+        for notice in ("LICENSE", "NOTICE.md", "META-INF/licenses/itembridge-MIT.txt"):
             if notice not in names:
                 violations.append(f"Missing source license/provenance notice: {notice}")
     with args.jar.open("rb") as stream:

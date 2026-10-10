@@ -3,8 +3,8 @@ main: dev.itemloom.paper.ItemLoomPlugin
 version: '${version}'
 api-version: '26.2'
 authors: [ItemLoom]
-description: Independent item engine with an NI configuration frontend
-softdepend: [PlaceholderAPI, MythicMobs, Vault, MagicGem, ItemsAdder, Oraxen]
+description: Item engine with NI and SX configuration frontends and ItemBridge sources
+softdepend: [PlaceholderAPI, MythicMobs, Vault, MagicGem, ItemsAdder, Oraxen, Nexo, CraftEngine, CustomFishing, MMOItems, EcoItems, ExecutableItems, Slimefun]
 permissions:
   itemloom.admin:
     default: op

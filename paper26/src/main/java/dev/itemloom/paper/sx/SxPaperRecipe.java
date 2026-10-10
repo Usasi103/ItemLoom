@@ -30,6 +30,9 @@ import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.potion.PotionType;
+import dev.itemloom.paper.integration.ExternalItemMaterial;
+import dev.itemloom.paper.integration.OptionalItemSources;
+import org.bukkit.entity.Player;
 
 /** SX convenience-field order, followed by explicit 26.2 components and custom NBT. */
 @SuppressWarnings("deprecation")
@@ -61,6 +64,7 @@ final class SxPaperRecipe {
     private final String id;
     private final SxConfig config;
     private final ItemStack imported;
+    private final OptionalItemSources itemSources;
     private ItemStack prototype;
     private final List<String> materials;
     private final SxConfig components, nbt, potions;
@@ -71,6 +75,14 @@ final class SxPaperRecipe {
     final int hash;
 
     SxPaperRecipe(SxRepository.Definition definition, SxConfig settings) {
+        this(definition, settings, new OptionalItemSources());
+    }
+
+    SxPaperRecipe(
+            SxRepository.Definition definition,
+            SxConfig settings,
+            OptionalItemSources itemSources) {
+        this.itemSources = itemSources;
         id = definition.id();
         config = definition.config();
         hash = config.values().hashCode();
@@ -106,7 +118,9 @@ final class SxPaperRecipe {
         if (imported == null)
             for (String material : materials)
                 if (!material.contains("<") && !material.contains("%"))
-                    SxMaterials.resolve(material);
+                    if (ExternalItemMaterial.isExternal(material))
+                        ExternalItemMaterial.parse(material);
+                    else SxMaterials.resolve(material);
         random = SxRandom.compile(config.section("Random").values());
         components = config.section("Components");
         nbt = config.section("NBT");
@@ -162,8 +176,10 @@ final class SxPaperRecipe {
         // Fixed definitions are validated before publication and reuse only an owned prototype.
         // Dynamic definitions still evaluate every request; random/scripts are never previewed
         // here.
-        if (imported == null && materials.size() == 1 && !dynamic(config.values()))
-            prototype = createDefault(handler);
+        if (imported == null
+                && materials.size() == 1
+                && !ExternalItemMaterial.isExternal(materials.getFirst())
+                && !dynamic(config.values())) prototype = createDefault(handler);
     }
 
     private static boolean dynamic(Object value) {
@@ -181,18 +197,27 @@ final class SxPaperRecipe {
                         materials.get(
                                 java.util.concurrent.ThreadLocalRandom.current()
                                         .nextInt(materials.size())));
-        SxMaterials.Resolved resolved = SxMaterials.resolve(material);
-        ItemStack item = new ItemStack(resolved.material());
-        int amount = Integer.parseInt(handler.replace(config.text("Amount", "1")));
-        if (amount < 1) throw new IllegalArgumentException("SX Amount must be positive: " + id);
-        item.setAmount(amount);
+        boolean external = ExternalItemMaterial.isExternal(material);
+        SxMaterials.Resolved resolved = external ? null : SxMaterials.resolve(material);
+        ItemStack item =
+                external
+                        ? itemSources.material(
+                                material,
+                                handler.getPlayer() instanceof Player player ? player : null,
+                                Map.of())
+                        : new ItemStack(resolved.material());
+        if (!external || config.get("Amount") != null) {
+            int amount = Integer.parseInt(handler.replace(config.text("Amount", "1")));
+            if (amount < 1) throw new IllegalArgumentException("SX Amount must be positive: " + id);
+            item.setAmount(amount);
+        }
         var meta = item.getItemMeta();
         String durability =
-                resolved.damage() == null
+                resolved == null || resolved.damage() == null
                         ? handler.replace(config.text("Durability", null))
                         : resolved.damage();
         if (durability != null && !durability.isEmpty() && meta instanceof Damageable damageable) {
-            int maximum = resolved.material().getMaxDurability();
+            int maximum = item.getType().getMaxDurability();
             int damage =
                     durability.endsWith("%")
                             ? (short)
@@ -211,7 +236,8 @@ final class SxPaperRecipe {
         }
         String name = handler.replace(config.text("Name", null));
         if (name != null) meta.setDisplayName(color(name));
-        meta.setLore(handler.replace(lore).stream().map(SxPaperRecipe::color).toList());
+        if (!external || config.get("Lore") != null)
+            meta.setLore(handler.replace(lore).stream().map(SxPaperRecipe::color).toList());
         for (String enchant : handler.replace(enchants)) {
             int colon = enchant.lastIndexOf(':');
             if (colon < 0) throw new IllegalArgumentException("Invalid SX enchantment: " + enchant);
@@ -232,7 +258,8 @@ final class SxPaperRecipe {
                 throw new IllegalArgumentException("Unknown SX ItemFlag: " + flag, error);
             }
         }
-        meta.setUnbreakable(config.bool("Unbreakable", false));
+        if (!external || config.get("Unbreakable") != null)
+            meta.setUnbreakable(config.bool("Unbreakable", false));
         if (meta instanceof LeatherArmorMeta leather && config.get("Color") != null)
             leather.setColor(
                     Color.fromRGB(
@@ -348,7 +375,8 @@ final class SxPaperRecipe {
                 expanded.put("AttributeModifiers", converted);
             }
             CompoundTag values = (CompoundTag) NmsItems.tag(expanded);
-            for (var entry : values.entrySet()) data.put(entry.getKey(), entry.getValue());
+            if (external) data.merge(values);
+            else for (var entry : values.entrySet()) data.put(entry.getKey(), entry.getValue());
             item = NmsItems.withCustomData(item, data);
         }
         return item;

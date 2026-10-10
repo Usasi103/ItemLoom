@@ -94,7 +94,7 @@ public final class NiNodes {
                             ? null
                             : textNodes.configured(type, config, evaluation);
             case "gradient" ->
-                    NiTextNodes.gradient(
+                    NiGradientText.render(
                             java.util.Arrays.asList(
                                     evaluation.text(config.string("colorStart")),
                                     evaluation.text(config.string("colorEnd")),
@@ -193,7 +193,7 @@ public final class NiNodes {
                             ? null
                             : textNodes.inline(type, parameters);
             case "gradient" ->
-                    NiTextNodes.gradient(
+                    NiGradientText.render(
                             NiTemplate.arguments(parameters, 4),
                             evaluation.mode() == NiEvaluation.Mode.SECTION);
             case "amount",

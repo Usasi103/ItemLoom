@@ -17,7 +17,23 @@ Attribution and GPL-3.0 licensing are retained. Compatibility does not cover eve
 third-party extension, command, Java API, or legacy server implementation. Supported behavior and
 intentional differences are documented in [USAGE.md](USAGE.md).
 
+Version 2.0.0 included a JavaScript action helper resource derived from NI's `lib.js`.
+Version 2.1.0 removes that resource and replaces it with Java helpers and generated binding glue.
+The source review also identified formula tokenization, gradient rendering, nested NBT editing,
+regular-expression editing, and pack sampling for replacement; these were reimplemented from
+behavioral contracts, together with SX branch/time parsing. This records the replacement work, not a claim of legal clean-room
+status or an erasure of the project's development history. Required configuration vocabulary,
+legacy script aliases, and data-format names remain in the compatibility boundary.
+
 ## Included source and runtime libraries
+
+- **ItemBridge 1.0.32**, copyright 2025 **jhqwqmc**: [ItemBridge](https://github.com/jhqwqmc/ItemBridge),
+  MIT License, source revision `bdf107863b64dc6d70888e4597a7413d3eea88fb`.
+  The public Maven artifact `cn.gtemc:itembridge:1.0.32` is embedded and relocated into
+  `dev.itemloom.internal.itembridge`; its license is packaged at `META-INF/licenses/itembridge-MIT.txt`.
+  The unmodified library includes small NI/SX adapter classes. ItemLoom excludes their registration
+  and rejects these provider IDs; it does not delegate generation to NI/SX or embed their plugin
+  implementations. Keeping the standard discovery API avoids relying on ItemBridge's private factories.
 
 - **Keystone 0.3.6**: the source subset used by ItemLoom is included under `vendor/keystone`, derived from
   source revision `3554cf5502ff4b52532511c396d5ef5c9bd29791`. Its source and license are supplied with this repository.

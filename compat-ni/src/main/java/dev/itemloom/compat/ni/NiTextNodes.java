@@ -216,48 +216,6 @@ final class NiTextNodes {
         return result;
     }
 
-    static String gradient(List<String> args, boolean legacy) {
-        if (NiNodes.arg(args, 0) == null
-                || NiNodes.arg(args, 1) == null
-                || NiNodes.arg(args, 3) == null) return null;
-        int start, end;
-        try {
-            start = Integer.parseInt(args.get(0), 16);
-            end = Integer.parseInt(args.get(1), 16);
-        } catch (NumberFormatException error) {
-            if (!legacy) return null;
-            start = 0;
-            end = 0;
-        }
-        start = Math.max(0, Math.min(0xffffff, start));
-        end = Math.max(0, Math.min(0xffffff, end));
-        int step = NiNodes.integer(NiNodes.arg(args, 2), 1);
-        if (legacy) step = Math.max(1, step);
-        String text = args.get(3);
-        if (text.length() <= step) return color(start) + text;
-        int red = start >> 16, green = start >> 8 & 255, blue = start & 255;
-        int redStep = ((end >> 16) - red) * step / (text.length() - 1);
-        int greenStep = ((end >> 8 & 255) - green) * step / (text.length() - 1);
-        int blueStep = ((end & 255) - blue) * step / (text.length() - 1);
-        StringBuilder output = new StringBuilder();
-        int current = 1;
-        for (int index = 0; index < text.length(); index++) {
-            if (current == 1) {
-                output.append(
-                        color(
-                                (Math.clamp(red, 0, 255) << 16)
-                                        | (Math.clamp(green, 0, 255) << 8)
-                                        | Math.clamp(blue, 0, 255)));
-                red += redStep;
-                green += greenStep;
-                blue += blueStep;
-            }
-            output.append(text.charAt(index));
-            current = current == step ? 1 : current + 1;
-        }
-        return output.toString();
-    }
-
     static String color(int value) {
         String hex = String.format(Locale.ROOT, "%06x", Math.clamp(value, 0, 0xffffff));
         StringBuilder output = new StringBuilder("§x");

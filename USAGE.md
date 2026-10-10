@@ -1,6 +1,6 @@
 # ItemLoom 使用说明
 
-适用于 `2.0.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+适用于 `2.1.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
 
 ## NI 配置与数据目录
 
@@ -21,6 +21,33 @@ ExampleGem:
 当 `plugins/ItemLoom/Items/` 和 `plugins/ItemLoom/SX-Item/` 均不存在时，会尝试读取相邻 `plugins/NeigeItems/`。这只是配置输入回退；之后的显式保存也会写入该实际输入树。创建自有目录后，应将需要同时加载的配置放在同一输入树中，不会自动合并两个目录。
 
 新生成物品使用 `itemloom:items` 身份。NI 配置/数据兼容与此前独立版本的改名迁移是不同路径；此前独立版本的数据目录、私有物品标记和直接 Java API 调用方须另行迁移。插件不携带专用迁移工具，也不按物品名称或贴图推断身份。
+
+## 外部物品底稿（ItemBridge）
+
+ItemBridge 1.0.32 已内嵌，无需另外安装 ItemBridge。安装所需的提供者插件，例如 CraftEngine，在其物品库中创建自己的物品，再使用明确的来源语法：
+
+```yaml
+# Items/example.yml（NI 格式）
+BridgeBlade:
+  material: 'itembridge:craftengine:example:blade'
+  name: '&6<quality>之剑'
+  sections: {quality: 稀有}
+  options: {durability: 100}
+
+# SX-Item/Item/example.yml（SX 格式）
+SXBridgeBlade:
+  ID: 'itembridge:craftengine:example:blade'
+  Name: '&6自定义之剑'
+  Update: true
+```
+
+`itembridge:<提供者>:<物品 ID>` 中，提供者使用 ItemBridge 的完整小写 ID，例如 `craftengine`、`itemsadder`、`oraxen`、`nexo`、`mythicmobs`、`magicgem`；物品 ID 中的冒号保留。例子的 `example:blade` 是管理员自建物品，不随插件附送。普通 NI `material` 和 SX `ID` 保持原有材质语义；NI 的 `static.material` 也支持外部来源。
+
+每次生成在主线程向提供者取完整物品并先克隆，再应用 ItemLoom 字段。未指定的名称、Lore、组件、PDC、自定义 NBT 和底稿数量保留；SX 可用 `Amount` 覆盖数量，命令和掉落交付流程仍按自己的数量参数处理。NI 静态覆盖先于普通字段，显式 `components` / SX `Components` 仍按原顺序覆盖。对外部底稿，明确的 `lore: []` / `Lore: []` 清除 Lore，`unbreakable: false` / `Unbreakable: false` 清除不可破坏状态。NBT 子树合并保留未覆盖字段；明确替换整个 `custom_data` 组件则替换该组件。ItemLoom 身份由本插件管理，普通 NI 的 `options.removeNBT` 约定仍有效。
+
+会把在线玩家传给提供者；ItemLoom 的随机参数、节点和锁定值仍由本插件展开，不自动注入外部插件的参数命名空间。外部物品不进入静态成品缓存，因此每次都能获得提供者的最新或按玩家生成的结果。提供者缺失、停用、物品不存在或 API 不兼容时生成失败并报告来源，不改成石头或自动换另一个来源。NI、SX 和 ItemLoom 本身不能作为外部提供者，以免重新依赖原插件或递归生成。
+
+保留完整底稿也意味着保留外部插件的识别标记：其监听器可能继续对该物品生效。名称和属性由 ItemLoom 覆盖，并不取消外部插件的行为。各提供者版本仍须按实际环境验证。
 
 ## 管理命令
 

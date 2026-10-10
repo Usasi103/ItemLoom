@@ -1,13 +1,98 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.Arrays;
-import java.util.List;
 import dev.itemloom.compat.ni.NiTemplate;
 import dev.itemloom.paper.compat.nbt.LegacyNbt;
 
-/** NI escaped numeric paths, including its compound fallback; all edits target a detached candidate. */
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+
+/** Rebuilds incompatible path containers recursively on the editor's detached NBT tree. */
 final class LegacyItemEditorManagerNbt {
     private LegacyItemEditorManagerNbt() {}
+
+    static void put(LegacyNbt.Compound root, String key, LegacyNbt value) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(value, "value");
+        List<String> path = NiTemplate.split(key, '.', 0);
+        LegacyNbt changed = write(root, path, 0, value);
+        if (changed != root)
+            throw new IllegalArgumentException("An item NBT path cannot replace its compound root");
+    }
+
+    private static LegacyNbt write(LegacyNbt node, List<String> path, int depth, LegacyNbt value) {
+        String key = path.get(depth);
+        Integer index = index(key);
+        if (depth == path.size() - 1) return leaf(node, key, index, value);
+        if (index != null) {
+            if (node instanceof LegacyNbt.ListValue list && insertionIndex(index, list.size())) {
+                LegacyNbt child = index == list.size() ? null : list.get(index);
+                LegacyNbt replacement = write(child, path, depth + 1, value);
+                if (child == null) list.add(replacement);
+                else if (child != replacement) list.set(index, replacement);
+                return list;
+            }
+            if (index == 0) {
+                LegacyNbt.ListValue list = new LegacyNbt.ListValue();
+                list.add(write(null, path, depth + 1, value));
+                return list;
+            }
+        }
+        LegacyNbt.Compound compound =
+                node instanceof LegacyNbt.Compound existing ? existing : new LegacyNbt.Compound();
+        LegacyNbt child = compound.get(key);
+        LegacyNbt replacement = write(child, path, depth + 1, value);
+        if (child != replacement) compound.put(key, replacement);
+        return compound;
+    }
+
+    private static LegacyNbt leaf(LegacyNbt node, String key, Integer index, LegacyNbt value) {
+        if (index == null) return named(node, key, value);
+        if (node instanceof LegacyNbt.ListValue list) {
+            if (!insertionIndex(index, list.size())) return named(null, key, value);
+            if (index == list.size()) list.add(value);
+            else list.set(index, value);
+            return list;
+        }
+        if (node instanceof LegacyNbt.ByteArray array) {
+            if (!(value instanceof LegacyNbt.ByteValue number)) return array;
+            byte[] contents = array.getAsByteArray();
+            if (!insertionIndex(index, contents.length)) return named(null, key, value);
+            if (index == contents.length) contents = Arrays.copyOf(contents, contents.length + 1);
+            contents[index] = number.getAsByte();
+            return new LegacyNbt.ByteArray(contents);
+        }
+        if (node instanceof LegacyNbt.IntArray array) {
+            if (!(value instanceof LegacyNbt.IntValue number)) return array;
+            int[] contents = array.getAsIntArray();
+            if (!insertionIndex(index, contents.length)) return named(null, key, value);
+            if (index == contents.length) contents = Arrays.copyOf(contents, contents.length + 1);
+            contents[index] = number.getAsInt();
+            return new LegacyNbt.IntArray(contents);
+        }
+        if (node instanceof LegacyNbt.LongArray array) {
+            if (!(value instanceof LegacyNbt.LongValue number)) return array;
+            long[] contents = array.getAsLongArray();
+            if (!insertionIndex(index, contents.length)) return named(null, key, value);
+            if (index == contents.length) contents = Arrays.copyOf(contents, contents.length + 1);
+            contents[index] = number.getAsLong();
+            return new LegacyNbt.LongArray(contents);
+        }
+        // A terminal integer leaves existing compounds and scalars intact. A missing container
+        // becomes an empty compound so the intermediate path still exists.
+        return node == null ? new LegacyNbt.Compound() : node;
+    }
+
+    private static LegacyNbt.Compound named(LegacyNbt node, String key, LegacyNbt value) {
+        LegacyNbt.Compound compound =
+                node instanceof LegacyNbt.Compound existing ? existing : new LegacyNbt.Compound();
+        compound.put(key, value);
+        return compound;
+    }
+
+    private static boolean insertionIndex(int index, int size) {
+        return index >= 0 && index <= size;
+    }
 
     private static Integer index(String text) {
         try {
@@ -15,96 +100,5 @@ final class LegacyItemEditorManagerNbt {
         } catch (NumberFormatException ignored) {
             return null;
         }
-    }
-
-    static void put(LegacyNbt.Compound root, String key, LegacyNbt value) {
-        LegacyNbt parent = root, current = root;
-        String previous = "";
-        List<String> path = NiTemplate.split(key, '.', 0);
-        for (int offset = 0; offset < path.size() - 1; offset++) {
-            String node = path.get(offset);
-            Integer index = index(node);
-            boolean fallback = false;
-            if (index != null) {
-                if (current instanceof LegacyNbt.ListValue list) {
-                    LegacyNbt before = parent;
-                    parent = current;
-                    if (index >= 0 && index < list.size()) current = list.get(index);
-                    else if (index == list.size()) current = list.addEmptyCompound();
-                    else {
-                        fallback = true;
-                        parent = before;
-                    }
-                    if (!fallback) previous = node;
-                } else if (index == 0) {
-                    LegacyNbt.ListValue list = new LegacyNbt.ListValue();
-                    ((LegacyNbt.Compound) parent).put(previous, list);
-                    current = list.addEmptyCompound();
-                    parent = list;
-                    previous = node;
-                } else fallback = true;
-            }
-            if (index == null || fallback) {
-                if (current instanceof LegacyNbt.Compound compound) {
-                    parent = current;
-                    current = compound.computeIfAbsent(node, ignored -> new LegacyNbt.Compound());
-                } else {
-                    LegacyNbt.Compound replacement = new LegacyNbt.Compound(),
-                            child = new LegacyNbt.Compound();
-                    ((LegacyNbt.Compound) parent).put(previous, replacement);
-                    replacement.put(node, child);
-                    parent = replacement;
-                    current = child;
-                }
-                previous = node;
-            }
-        }
-        String node = path.getLast();
-        Integer index = index(node);
-        boolean fallback = false;
-        if (index != null) {
-            if (current instanceof LegacyNbt.ByteArray array
-                    && value instanceof LegacyNbt.ByteValue number) {
-                byte[] bytes = array.getAsByteArray();
-                if (index >= 0 && index <= bytes.length) {
-                    if (index == bytes.length) bytes = Arrays.copyOf(bytes, bytes.length + 1);
-                    bytes[index] = number.getAsByte();
-                    replace(parent, previous, new LegacyNbt.ByteArray(bytes));
-                } else fallback = true;
-            } else if (current instanceof LegacyNbt.IntArray array
-                    && value instanceof LegacyNbt.IntValue number) {
-                int[] ints = array.getAsIntArray();
-                if (index >= 0 && index <= ints.length) {
-                    if (index == ints.length) ints = Arrays.copyOf(ints, ints.length + 1);
-                    ints[index] = number.getAsInt();
-                    replace(parent, previous, new LegacyNbt.IntArray(ints));
-                } else fallback = true;
-            } else if (current instanceof LegacyNbt.LongArray array
-                    && value instanceof LegacyNbt.LongValue number) {
-                long[] longs = array.getAsLongArray();
-                if (index >= 0 && index <= longs.length) {
-                    if (index == longs.length) longs = Arrays.copyOf(longs, longs.length + 1);
-                    longs[index] = number.getAsLong();
-                    replace(parent, previous, new LegacyNbt.LongArray(longs));
-                } else fallback = true;
-            } else if (current instanceof LegacyNbt.ListValue list) {
-                if (index >= 0 && index < list.size()) list.set(index, value);
-                else if (index == list.size()) list.add(value);
-                else fallback = true;
-            }
-        }
-        if (index == null || fallback) {
-            if (current instanceof LegacyNbt.Compound compound) compound.put(node, value);
-            else {
-                LegacyNbt.Compound replacement = new LegacyNbt.Compound();
-                replacement.put(node, value);
-                ((LegacyNbt.Compound) parent).put(previous, replacement);
-            }
-        }
-    }
-
-    private static void replace(LegacyNbt parent, String key, LegacyNbt value) {
-        if (parent instanceof LegacyNbt.ListValue list) list.set(Integer.parseInt(key), value);
-        else ((LegacyNbt.Compound) parent).put(key, value);
     }
 }

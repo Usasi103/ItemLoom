@@ -68,7 +68,7 @@ public final class NiItemAppearance {
 
     private Material material;
     private Integer damage, model, color;
-    private boolean unbreakable;
+    private Boolean unbreakable;
     private Component name, itemName;
     private List<Component> lore;
     private List<String> flags = List.of();
@@ -77,6 +77,11 @@ public final class NiItemAppearance {
     private final Consumer<String> warning;
 
     public NiItemAppearance(NiConfig config, Consumer<String> warning) {
+        this(config, warning, false);
+    }
+
+    /** External prototypes opt into explicit empty-lore and false-unbreakable overrides. */
+    public NiItemAppearance(NiConfig config, Consumer<String> warning, boolean external) {
         this.warning = warning;
         if (config == null) return;
         for (String key : config.keys()) {
@@ -95,7 +100,7 @@ public final class NiItemAppearance {
                             lines.add(
                                     key.equalsIgnoreCase("mini-lore") ? mini(part) : legacy(part));
                         }
-                    if (!lines.isEmpty()) lore = List.copyOf(lines);
+                    if (external || !lines.isEmpty()) lore = List.copyOf(lines);
                 }
                 case "color" -> {
                     Object value = config.get(key);
@@ -108,7 +113,9 @@ public final class NiItemAppearance {
                         }
                     }
                 }
-                case "unbreakable" -> unbreakable = config.bool(key, false);
+                case "unbreakable" -> {
+                    if (external || config.bool(key, false)) unbreakable = config.bool(key, false);
+                }
                 case "item-flags", "itemflags", "hide-flags", "hideflags" -> {
                     List<String> requested = config.strings(key);
                     if (!requested.isEmpty()) flags = List.copyOf(requested);
@@ -148,9 +155,13 @@ public final class NiItemAppearance {
 
     /** Input and cached prototypes are never changed; the returned NMS stack is exclusively owned. */
     public ItemStack apply(ItemStack source) {
-        if (material != null && material.isAir()) return ItemStack.EMPTY;
+        return apply(source, true);
+    }
+
+    public ItemStack apply(ItemStack source, boolean changeMaterial) {
+        if (changeMaterial && material != null && material.isAir()) return ItemStack.EMPTY;
         ItemStack copy = source.copy();
-        if (material != null) copy.setItem(CraftMagicNumbers.getItem(material));
+        if (changeMaterial && material != null) copy.setItem(CraftMagicNumbers.getItem(material));
         if (copy.isEmpty()) return copy;
         if (damage != null) copy.setDamageValue(damage);
         if (!enchantments.isEmpty())
@@ -164,7 +175,8 @@ public final class NiItemAppearance {
         if (itemName != null) copy.set(DataComponents.ITEM_NAME, itemName);
         if (lore != null) copy.set(DataComponents.LORE, new ItemLore(lore));
         if (color != null) copy.set(DataComponents.DYED_COLOR, new DyedItemColor(color));
-        if (unbreakable) copy.set(DataComponents.UNBREAKABLE, Unit.INSTANCE);
+        if (Boolean.TRUE.equals(unbreakable)) copy.set(DataComponents.UNBREAKABLE, Unit.INSTANCE);
+        else if (Boolean.FALSE.equals(unbreakable)) copy.remove(DataComponents.UNBREAKABLE);
         if (!flags.isEmpty()) {
             TooltipDisplay display =
                     copy.getOrDefault(DataComponents.TOOLTIP_DISPLAY, TooltipDisplay.DEFAULT);
