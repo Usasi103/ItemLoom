@@ -6,7 +6,7 @@ ItemLoom is an open-source custom item plugin for **Paper 26.2 and Java 25**. De
 
 Its item generation, storage, and Java API run independently. Neither NI nor SX-Item is required. ItemLoom is licensed under GPL-3.0 and retains upstream attribution in [NOTICE](NOTICE.md).
 
-Version 2.3.0 removes Paper's costly legacy initialization from SX material conversion and extends source checks to resources, build inputs and dependency notices. File-level decisions and hashes are recorded in the [source review inventory](provenance/README.md). Runtime independence does not erase development history or constitute legal clean-room certification.
+Identified early adapter implementations are being replaced from behavior contracts, with comparisons against the previous release to check configuration behavior. The current replacement scope, file-level decisions and hashes are recorded in the [source review inventory](provenance/README.md). The project preserves its development history and does not claim legal clean-room certification.
 
 The embedded [ItemBridge](https://github.com/jhqwqmc/ItemBridge) library can use complete items from providers such as CraftEngine as prototypes. ItemLoom applies explicit configuration overrides and preserves other components, PDC, and custom tags. Install the chosen provider separately. Use `material: itembridge:craftengine:example:blade` in NI definitions or `ID: itembridge:craftengine:example:blade` in SX definitions.
 

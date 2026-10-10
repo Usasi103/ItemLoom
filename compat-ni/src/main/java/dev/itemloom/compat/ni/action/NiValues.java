@@ -22,62 +22,13 @@ public final class NiValues {
 
     public static <T> Function<NiActionContext, T> compile(
             Object input, Class<T> type, Consumer<String> validate) {
-        if (input == null) return context -> null;
-        if (input instanceof String text) {
-            int delimiter = text.indexOf(": ");
-            String prefix =
-                    (delimiter < 0 ? text : text.substring(0, delimiter)).toLowerCase(Locale.ROOT);
-            String content = delimiter < 0 ? null : text.substring(delimiter + 2);
-            if (prefix.equals("js")) {
-                if (content != null) validate.accept(content);
-                return context -> {
-                    try {
-                        return content == null
-                                ? null
-                                : scriptValue(context.evaluate(content), type);
-                    } catch (RuntimeException error) {
-                        context.evaluation().warning("Value script failed: " + error.getMessage());
-                        return null;
-                    }
-                };
-            }
-            if (prefix.equals("raw")) {
-                T value = convert(content, type);
-                return context -> value;
-            }
-            T constant = convert(text, type);
-            if (constant != null
-                    && !(type == String.class && text.contains("<") && text.contains(">")))
-                return context -> constant;
-            return context -> convert(context.parse(text), type);
-        }
-        if (input instanceof List<?> list) {
-            List<Function<NiActionContext, T>> alternatives =
-                    list.stream().map(value -> compile(value, type, validate)).toList();
-            return context -> {
-                for (var alternative : alternatives) {
-                    T value = alternative.apply(context);
-                    if (value != null) return value;
-                }
-                return null;
-            };
-        }
-        NiConfig config = config(input);
-        if (config == null) {
-            T value = convert(input, type);
-            return context -> value;
-        }
-        var branch = branches(config, value -> compile(value, type, validate), validate);
-        if (branch != null) return branch;
-        if (config.keys().size() != 1) return context -> null;
-        if (config.keys().size() == 1) {
-            String key = config.keys().iterator().next();
-            if (config.get(key) == null) return context -> null;
-            if ((key.equals("js") || key.equals("raw")) && config.get(key) != null)
-                return compile(key + ": " + config.string(key), type, validate);
-        }
-        T converted = convert(input, type);
-        return context -> converted;
+        return NiValueSyntax.compile(
+                input,
+                type,
+                validate,
+                config -> branches(config, value -> compile(value, type, validate), validate),
+                value -> convert(value, type),
+                value -> scriptValue(value, type));
     }
 
     public static <T> Function<NiActionContext, List<T>> compileList(Object input, Class<T> type) {

@@ -294,6 +294,9 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
     }
 
     public static final class Compound extends LegacyNbt implements Map<String, LegacyNbt> {
+        private static final java.util.Comparator<Entry<String, LegacyNbt>> ENTRY_ORDER =
+                Entry.<String, LegacyNbt>comparingByKey().thenComparing(Entry.comparingByValue());
+
         public Compound() {
             this(new CompoundTag());
         }
@@ -327,19 +330,8 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         @Override
         public int compareTo(LegacyNbt other) {
             if (!(other instanceof Compound value)) return super.compareTo(other);
-            int size = Integer.compare(size(), value.size());
-            if (size != 0) return size;
-            Iterator<Entry<String, LegacyNbt>> left = entrySet().iterator(),
-                    right = value.entrySet().iterator();
-            while (left.hasNext()) {
-                var first = left.next();
-                var second = right.next();
-                int key = first.getKey().compareTo(second.getKey());
-                if (key != 0) return key;
-                int child = first.getValue().compareTo(second.getValue());
-                if (child != 0) return child;
-            }
-            return 0;
+            return dev.itemloom.paper.compat.LegacyStateRules.compareOrdered(
+                    size(), entrySet(), value.size(), value.entrySet(), ENTRY_ORDER);
         }
 
         public void saveTo(ItemStack item) {
@@ -1447,13 +1439,8 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         @Override
         public int compareTo(LegacyNbt other) {
             if (!(other instanceof ListValue value)) return super.compareTo(other);
-            int size = Integer.compare(size(), value.size());
-            if (size != 0) return size;
-            for (int index = 0; index < size(); index++) {
-                int child = get(index).compareTo(value.get(index));
-                if (child != 0) return child;
-            }
-            return 0;
+            return dev.itemloom.paper.compat.LegacyStateRules.compareOrdered(
+                    size(), this, value.size(), value, java.util.Comparator.naturalOrder());
         }
 
         public Compound addEmptyCompound() {

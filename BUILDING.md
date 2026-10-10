@@ -97,6 +97,19 @@ plugins only for the integration scenarios being exercised. Check the server's s
 startup, individual JSON assertions, errors, and normal shutdown; the process exit code alone
 does not establish that all scenarios passed.
 
+For the 2.5.0 replacements, run `ilprobe source-replacement` with the same new probe
+JAR against 2.4.0 and the candidate in separate, sequential Paper 26.2 instances.
+Compare the `observations` objects in `plugins/ItemLoomProbe/source-replacement.json`,
+including value types and expected exception classes. Top-level string values
+are recorded as UTF-16 code units so isolated surrogate results remain exact.
+Its `passed` flag reports
+that observation groups completed; it does not establish equivalence without the
+cross-version comparison. Inspect normal fixtures as well: two matching errors
+are not proof that a valid fixture worked. Durability, state carry, NBT/item
+ordering, text nodes, SX locks and item fields are covered; arbitrary scripts and
+all configurations are not. Use the action/runtime/editor and other relevant
+probes alongside the unit tests for execution paths outside this observation set.
+
 Synthetic players and events do not test actual client rendering, prediction, or network load.
 Record real-client and stress testing separately. Do not load the probe on a live server.
 

@@ -182,32 +182,21 @@ public final class NiActions {
     }
 
     private Step<NiActionContext> compileBody(Object input) {
-        if (input == null) return EMPTY;
-        if (input instanceof String text) return text(text);
-        if (input instanceof List<?> list)
-            return ActionFlow.sequence(list.stream().map(this::compile).toList());
-        NiConfig config = NiValues.config(input);
-        if (config == null) return EMPTY;
-        String type = config.string("type", "").toLowerCase(Locale.ROOT);
-        if (!List.of(
-                        "condition",
-                        "label",
-                        "repeat",
-                        "while",
-                        "contains",
-                        "key",
-                        "int-tree",
-                        "double-tree",
-                        "weight",
-                        "condition-weight")
-                .contains(type)) {
-            if (config.contains("condition")) type = "condition";
-            else if (config.contains("repeat")) type = "repeat";
-            else if (config.contains("while")) type = "while";
-            else if (config.contains("label")) type = "label";
-        }
+        return switch (NiActionSyntax.classify(input)) {
+            case NiActionSyntax.Empty ignored -> EMPTY;
+            case NiActionSyntax.Text form -> text(form.source());
+            case NiActionSyntax.Sequence form ->
+                    ActionFlow.sequence(form.values().stream().map(this::compile).toList());
+            case NiActionSyntax.Nested form -> compile(form.value());
+            case NiActionSyntax.Branch form -> compileBranch(form);
+        };
+    }
+
+    private Step<NiActionContext> compileBranch(NiActionSyntax.Branch form) {
+        NiConfig config = form.config();
+        NiActionSyntax.Kind type = form.kind();
         return switch (type) {
-            case "condition" -> {
+            case CONDITION -> {
                 String condition = config.string("condition");
                 if (condition != null) validate.accept(condition);
                 var yes = compile(config.get("actions"));
@@ -221,10 +210,10 @@ public final class NiActions {
                     return yes.run(context);
                 };
             }
-            case "label" ->
+            case LABEL ->
                     ActionFlow.label(
                             config.string("label", "label"), compile(config.get("actions")));
-            case "repeat" -> {
+            case REPEAT -> {
                 var amount = NiValues.compile(config.get("repeat"), Integer.class, validate);
                 var body = compile(config.get("actions"));
                 String key = config.string("global-id", "i");
@@ -241,7 +230,7 @@ public final class NiActions {
                             .run(context);
                 };
             }
-            case "while" -> {
+            case WHILE -> {
                 String condition = config.string("while");
                 if (condition != null) validate.accept(condition);
                 var body = compile(config.get("actions"));
@@ -262,10 +251,10 @@ public final class NiActions {
                                 .run(context)
                                 .thenCompose(ignored -> finish.run(context));
             }
-            case "contains", "key", "int-tree", "double-tree" -> {
+            case CONTAINS, KEY, INT_TREE, DOUBLE_TREE -> {
                 var fallback = compile(config.get("default-action"));
                 var match = compile(config.get("match-action"));
-                boolean contains = type.equals("contains");
+                boolean contains = type == NiActionSyntax.Kind.CONTAINS;
                 var select =
                         NiValues.select(
                                 config,
@@ -279,11 +268,11 @@ public final class NiActions {
                                 validate);
                 yield context -> select.apply(context).run(context);
             }
-            case "weight", "condition-weight" -> {
+            case WEIGHT, CONDITION_WEIGHT -> {
                 var entries =
                         NiValues.weighted(
                                 config.get("actions"),
-                                type.equals("condition-weight"),
+                                type == NiActionSyntax.Kind.CONDITION_WEIGHT,
                                 "actions",
                                 this::compile,
                                 validate);
@@ -297,12 +286,6 @@ public final class NiActions {
                         return selected.values().getFirst().run(context);
                     return ActionFlow.all(selected.values()).run(context);
                 };
-            }
-            default -> {
-                if (config.keys().size() != 1) yield EMPTY;
-                String key = config.keys().iterator().next();
-                if (key.equals("actions")) yield compile(config.get(key));
-                yield config.get(key) instanceof String value ? text(key + ": " + value) : EMPTY;
             }
         };
     }

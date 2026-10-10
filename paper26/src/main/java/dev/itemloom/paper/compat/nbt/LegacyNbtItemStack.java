@@ -22,6 +22,13 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
     private static final NiItemMigration MIGRATION = new NiItemMigration();
     private static final Set<String> MODELED_STATE =
             Set.of("schema", "id", "rolls", "null_rolls", "properties", "compat_ni_rolls");
+    private static final java.util.Comparator<LegacyNbtItemStack> ORDER =
+            dev.itemloom.paper.compat.LegacyStateRules.itemOrder(
+                    value -> value.item.getType().ordinal(),
+                    value -> value.item.getAmount(),
+                    value -> value.item.getDurability(),
+                    LegacyNbtItemStack::getTag,
+                    java.util.Comparator.naturalOrder());
     private final ItemStack item;
 
     public LegacyNbtItemStack(ItemStack item) {
@@ -196,13 +203,6 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
 
     @Override
     public int compareTo(LegacyNbtItemStack other) {
-        int type = Integer.compare(item.getType().ordinal(), other.item.getType().ordinal());
-        if (type != 0) return type;
-        int count = Integer.compare(item.getAmount(), other.item.getAmount());
-        if (count != 0) return count;
-        int damage = Short.compare(item.getDurability(), other.item.getDurability());
-        if (damage != 0) return damage;
-        LegacyNbt.Compound left = getTag(), right = other.getTag();
-        return left == null ? right == null ? 0 : -1 : right == null ? 1 : left.compareTo(right);
+        return ORDER.compare(this, other);
     }
 }

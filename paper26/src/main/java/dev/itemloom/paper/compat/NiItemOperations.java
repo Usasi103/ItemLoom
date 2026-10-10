@@ -245,11 +245,10 @@ public final class NiItemOperations {
     }
 
     private static void preserveState(LegacyNbt.Compound previous, LegacyNbt.Compound tag) {
-        LegacyNbt.Compound current = tag.getCompound("NeigeItems");
-        if (current == null) return;
-        if (previous.containsKey("charge")) current.putInt("charge", previous.getInt("charge"));
-        if (previous.containsKey("durability"))
-            current.putInt("durability", previous.getInt("durability"));
+        var destination = tag.getCompound("NeigeItems");
+        if (destination != null)
+            LegacyStateRules.captureNumericState(previous::containsKey, previous::getInt)
+                    .applyTo(destination::putInt);
     }
 
     private void ensureUnchanged(ItemStack item, ItemStack before) {

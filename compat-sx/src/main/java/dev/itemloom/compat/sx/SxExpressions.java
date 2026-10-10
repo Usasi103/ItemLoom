@@ -153,7 +153,7 @@ public final class SxExpressions {
     }
 
     public Object replace(Object value) {
-        if (value instanceof String text) return typed(replace(text));
+        if (value instanceof String text) return SxValueRules.scalar(replace(text));
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();
             map.forEach((key, v) -> result.put(key.toString(), replace(v)));
@@ -163,26 +163,12 @@ public final class SxExpressions {
         return value;
     }
 
-    private static Object typed(String value) {
-        if (value == null || !value.startsWith("[")) return value;
-        int end = value.indexOf(']');
-        if (end < 0) return value;
-        String number = value.substring(end + 1);
-        return switch (value.substring(1, end)) {
-            case "byte" -> Byte.valueOf(number);
-            case "short" -> Short.valueOf(number);
-            case "int" -> Integer.valueOf(number);
-            case "long" -> Long.valueOf(number);
-            case "float" -> Float.valueOf(number);
-            case "double" -> Double.valueOf(number);
-            default -> value;
-        };
-    }
-
     private String expression(String kind, String argument) {
         return switch (kind) {
             case "s" -> argument.contains(":") ? choose(argument) : random(argument);
-            case "l" -> lock(argument);
+            case "l" ->
+                    SxValueRules.locked(
+                            argument, locks, other, this::random, rng::nextInt, this::replace);
             case "i", "r" -> integer(argument);
             case "d" -> decimal(argument);
             case "b" -> matches(argument);
@@ -214,21 +200,6 @@ public final class SxExpressions {
             default ->
                     throw new IllegalArgumentException("Unsupported SX expression type: " + kind);
         };
-    }
-
-    private String lock(String argument) {
-        int hash = argument.indexOf('#');
-        String key = hash < 0 ? argument : argument.substring(0, hash);
-        String value = locks.get(key);
-        if (value != null) return value;
-        if (hash < 0) value = random(key);
-        else {
-            value = other.get(key);
-            if (value == null) value = choose(argument.substring(hash + 1));
-        }
-        value = replace(value);
-        locks.put(key, value);
-        return value;
     }
 
     private String choose(String text) {

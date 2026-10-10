@@ -29,10 +29,43 @@ clean-room claim: the coordinator and earlier development had source exposure.
 - SX arithmetic evaluation and script scope initialization/calling boundaries.
 
 Required configuration names, script aliases, data layouts, simple policies and
-ordinary platform adapters remain. Retaining a file means the review found no
-remaining substantive replacement blocker in that file, not that its historical
-creation is proven independent. Mixed files explicitly record the replaced
-region and the reason for retaining the surrounding implementation.
+ordinary platform adapters remain. Retention records the review decision at that
+time, not proof of historical independent creation. The 2.5.0 follow-up below
+revises several earlier retention decisions. Mixed files explicitly record the
+replaced region and the reason for retaining the surrounding implementation.
+
+## Renewed adapter comparison and replacements in 2.5.0
+
+A comparison with the early NI import and later Java reference identified five
+retained method bodies for replacement: `NiItemOperations.preserveState`,
+`LegacyItemEditorManager.checkDurability`, `LegacyNbt.Compound.compareTo`,
+`LegacyNbt.ListValue.compareTo`, and `LegacyNbtItemStack.compareTo`. A broader
+structural review also selected action context/grammar, text nodes and SX field
+decoding. These are engineering findings about source carryover or implementation
+structure; they are not rulings that every selected operation is copyrightable.
+
+Fresh workers received behavior-only contracts, approved adjacent APIs and test
+fixtures. They were instructed not to read the old target bodies, upstream or
+private source, history, or disassembly. The coordinator had read old source,
+integrated the replacements, and checked behavior against the released 2.4.0 JAR.
+This bounded separation is documented without a legal clean-room claim.
+
+| Region | Replacement | Retained contract and surrounding code |
+|---|---|---|
+| NI action context | Explicit shared-state owner, binding presence records and copy construction | Lazy revision-owned scope, aliases, shared variables and per-copy evaluation/thread status |
+| NI action/value grammar | Typed syntax plans and schema-driven dispatch | Input precedence, list/null behavior, singleton identity, nested host dispatch and existing execution/scheduling |
+| NI string/regex nodes | Typed requests, operation registry and bounded pattern cache | Field expansion order, strict arity, Java string/regex behavior and warning/fallback rules |
+| Five state/comparison bodies | Schema-based numeric snapshot, pure damage quantization and composed/sequence comparators in `LegacyStateRules` | Present fields, signed narrowing, order magnitude/laziness and minimal public adapters |
+| SX scalar/lock expressions | Decoder registry, parsed source and explicit cache transaction in `SxValueRules` | Wrapper types, cache presence, expansion and commit timing |
+| SX item fields | Prepared named edit plan with explicit metadata/NMS transitions in `SxFieldPlan` | Field order, potion/UUID conversions, external prototype omissions, component/NBT precedence and identity |
+
+The displaced bodies are removed rather than retained as fallbacks. Configuration
+files are not rewritten. Names such as `charge`, `durability`, potion keys and
+script aliases remain because they are supported input contracts; ordinary
+arithmetic, comparison and platform calls remain where those contracts require
+them. The inventory updates only the affected production inputs; unchanged
+entries retain their earlier review decisions. Tests and paired runtime
+observations check behavior, not legal authorship or exhaustive compatibility.
 
 ## Dependencies and limits
 

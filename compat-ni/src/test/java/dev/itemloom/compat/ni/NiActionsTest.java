@@ -18,6 +18,42 @@ import org.junit.jupiter.api.Test;
 
 class NiActionsTest {
     @Test
+    void nestedActionsKeepEachHostDispatchBoundary() {
+        try (NiScripts scripts = new NiScripts(Map.of(), Map.of())) {
+            var dispatched = new java.util.concurrent.atomic.AtomicInteger();
+            List<String> effects = new ArrayList<>();
+            NiActions.Host host =
+                    new NiActions.Host() {
+                        public CompletionStage<ActionFlow.Result> execute(
+                                String id, String content, NiActionContext context) {
+                            effects.add(id + ':' + content);
+                            return CompletableFuture.completedFuture(ActionFlow.Result.CONTINUE);
+                        }
+
+                        public void fork(
+                                ActionFlow.Step<NiActionContext> step,
+                                NiActionContext context,
+                                boolean async) {
+                            throw new AssertionError("Unexpected fork");
+                        }
+
+                        public CompletionStage<ActionFlow.Result> dispatch(
+                                ActionFlow.Step<NiActionContext> step, NiActionContext context) {
+                            dispatched.incrementAndGet();
+                            return step.run(context);
+                        }
+                    };
+            new NiActions(host)
+                    .compile(Map.of("actions", Map.of("actions", "tell: nested")))
+                    .run(context(scripts, new AtomicBoolean(true)))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(3, dispatched.get());
+            assertEquals(List.of("tell:nested"), effects);
+        }
+    }
+
+    @Test
     void qualifiedNamesResolveRegisteredBasicsAndExtensionsButNotJsOrEditors() {
         try (NiScripts scripts = new NiScripts(Map.of(), Map.of())) {
             Host host = new Host();

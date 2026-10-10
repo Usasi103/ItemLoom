@@ -29,10 +29,13 @@ public final class ItemsProbe extends JavaPlugin {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         String mode = args.length == 0 ? "corpus" : args[0];
+        getLogger().info("Starting probe: " + mode);
         try {
             var reference = getServer().getPluginManager().getPlugin("NeigeItems");
             CompletionStage<Map<String, Object>> result =
                     switch (mode) {
+                        case "source-replacement" ->
+                                CompletableFuture.completedFuture(SourceReplacementProbe.run(this));
                         case "legacy-materials" ->
                                 CompletableFuture.completedFuture(
                                         LegacyMaterialsProbe.run(
@@ -146,7 +149,11 @@ public final class ItemsProbe extends JavaPlugin {
                                                 + "_PROBE "
                                                 + evidence);
                             } catch (Exception failure) {
-                                throw new IllegalStateException(failure);
+                                getLogger()
+                                        .log(
+                                                java.util.logging.Level.SEVERE,
+                                                "Cannot write probe result: " + mode,
+                                                failure);
                             }
                         });
                 return true;

@@ -40,6 +40,16 @@ from the pinned Paper API, not NI/SX implementation code; see
 corrects missing dependency license resources in the 2.2.0 distribution. It does
 not establish a new historical independent-authorship claim.
 
+Version 2.5.0 follows a renewed comparison against early NI adapters and the SX
+frontend. It replaces five previously retained state/durability/comparison method
+bodies, plus action context and grammar, string/regex nodes, SX scalar/lock
+decoding and item-field application. Fresh workers used behavior contracts and
+permitted adjacent APIs without reading the displaced bodies; the coordinator
+had source exposure and integrated the results. This corrects the earlier review's
+retention decisions for those regions. Required configuration names, script
+aliases and ordinary platform rules remain. The targeted replacements do not
+erase prior distribution or certify historical independent authorship.
+
 ## Included source and runtime libraries
 
 - **ItemBridge 1.0.32**, copyright 2025 **jhqwqmc**: [ItemBridge](https://github.com/jhqwqmc/ItemBridge),

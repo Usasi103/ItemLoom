@@ -1,84 +1,99 @@
 package dev.itemloom.compat.ni.action;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
 import dev.itemloom.compat.ni.NiEvaluation;
 import dev.itemloom.compat.ni.NiScripts;
+import dev.itemloom.compat.ni.script.LegacyActionResult;
 import dev.itemloom.core.ActionFlow;
-import org.bukkit.entity.Player;
 
-/** Mutable state belongs to one action invocation, including its own script-global scope. */
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
+import org.bukkit.inventory.ItemStack;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+
+/** An action call's view of shared variables, with its own evaluation and thread status. */
 public final class NiActionContext implements Cloneable {
     private static final ThreadLocal<NiActionContext> CURRENT = new ThreadLocal<>();
+
+    private final SharedState shared;
     private NiEvaluation evaluation;
-    private final Object caster;
-    private final Map<String, Object> global;
-    private final Map<String, Object> params;
-    private final ScopeState scope;
-    private final BooleanSupplier active;
-    private final Map<NiContextKey<?>, Object> values = new HashMap<>();
     private boolean sync;
 
-    /** Shared by shallow clones, just as the eagerly created scope was. Guarded by scripts. */
-    private static final class ScopeState {
-        private static final Object REMOVED = new Object();
-        private final NiScripts scripts;
-        private Map<String, Object> initial;
-        private Map<String, Object> changes = new java.util.LinkedHashMap<>();
-        private NiScripts.Scope resolved;
+    /** Presence matters: removing a binding and assigning null have different script semantics. */
+    private record Binding(boolean present, Object value) {
+        static Binding at(Map<String, Object> values, String name) {
+            return new Binding(values.containsKey(name), values.get(name));
+        }
 
-        ScopeState(NiScripts scripts, Map<String, Object> initial) {
-            if (!scripts.isOpen())
-                throw new IllegalStateException("Script revision has been closed");
+        void apply(Map<String, Object> values, String name) {
+            if (present) values.put(name, value);
+            else values.remove(name);
+        }
+    }
+
+    /** All accesses to mutable scope state use the revision's script monitor. */
+    private static final class SharedState {
+        final NiScripts scripts;
+        final Object caster;
+        final Map<String, Object> global;
+        final Map<String, Object> params;
+        final BooleanSupplier active;
+        final Map<NiContextKey<?>, Object> keys = new IdentityHashMap<>();
+        Map<String, Object> initialNames;
+        Map<String, Binding> pending = new java.util.LinkedHashMap<>();
+        NiScripts.Scope scope;
+
+        SharedState(
+                NiScripts scripts,
+                Object caster,
+                Map<String, Object> global,
+                Map<String, Object> params,
+                BooleanSupplier active,
+                NiActionContext context) {
             this.scripts = scripts;
-            this.initial = initial;
+            this.caster = caster;
+            this.global = global == null ? Collections.synchronizedMap(new HashMap<>()) : global;
+            this.params = params;
+            this.active = active;
+            initialNames = params == null ? new HashMap<>() : new HashMap<>(params);
+            initialNames.put("target", caster);
+            initialNames.put("player", caster instanceof Player player ? player : null);
+            initialNames.put("global", this.global);
+            initialNames.put("glo", this.global);
+            initialNames.put("context", context);
         }
 
         NiScripts.Scope resolve() {
-            if (resolved == null) {
-                NiScripts.Scope prepared = scripts.actionScope(initial);
-                // Metadata is set after namespace/library initialization in the eager path.
-                // Replay it after initialization so an alias or helper cannot overwrite it.
-                changes.forEach(
-                        (name, value) -> {
-                            if (value == REMOVED) prepared.bindings().remove(name);
-                            else prepared.bindings().put(name, value);
-                        });
-                resolved = prepared;
-                initial = null;
-                changes = null;
+            if (scope == null) {
+                NiScripts.Scope created = scripts.actionScope(initialNames);
+                pending.forEach((name, binding) -> binding.apply(created.bindings(), name));
+                scope = created;
+                pending = null;
+                initialNames = null;
             }
-            return resolved;
+            return scope;
         }
 
-        void put(String name, Object value) {
-            if (resolved == null) changes.put(name, value);
-            else resolved.bindings().put(name, value);
+        Binding binding(String name) {
+            if (scope != null) return Binding.at(scope.bindings(), name);
+            Binding change = pending.get(name);
+            return change == null ? Binding.at(initialNames, name) : change;
         }
 
-        void remove(String name) {
-            if (resolved == null) changes.put(name, REMOVED);
-            else resolved.bindings().remove(name);
-        }
-
-        boolean contains(String name) {
-            if (resolved != null) return resolved.bindings().containsKey(name);
-            return changes.containsKey(name)
-                    ? changes.get(name) != REMOVED
-                    : initial.containsKey(name);
-        }
-
-        Object value(String name) {
-            if (resolved != null) return resolved.bindings().get(name);
-            Object value = changes.containsKey(name) ? changes.get(name) : initial.get(name);
-            return value == REMOVED ? null : value;
+        void bind(String name, Binding binding) {
+            if (scope == null) pending.put(name, binding);
+            else binding.apply(scope.bindings(), name);
         }
     }
 
     public NiActionContext() {
-        this(null);
+        this((Object) null);
     }
 
     public NiActionContext(Object caster) {
@@ -89,11 +104,12 @@ public final class NiActionContext implements Cloneable {
         this(caster, null, params);
     }
 
-    public NiActionContext(Object caster, Map<String, Object> global, Map<String, Object> params) {
+    public NiActionContext(
+            Object caster, Map<String, Object> suppliedGlobal, Map<String, Object> params) {
         this(
                 NiEvaluation.current().action(caster),
                 caster,
-                global,
+                suppliedGlobal,
                 params,
                 NiEvaluation.current().scripts()::isOpen);
     }
@@ -112,22 +128,24 @@ public final class NiActionContext implements Cloneable {
             Map<String, Object> suppliedGlobal,
             Map<String, Object> params,
             BooleanSupplier active) {
-        this.caster = caster;
-        this.params = params;
-        this.active = active;
-        global =
-                suppliedGlobal == null
-                        ? Collections.synchronizedMap(new HashMap<>())
-                        : suppliedGlobal;
-        this.evaluation = evaluation.withActionCache(global);
-        Map<String, Object> bindings = params == null ? new HashMap<>() : new HashMap<>(params);
-        bindings.put("target", caster);
-        bindings.put("player", caster instanceof Player ? caster : null);
-        bindings.put("global", global);
-        bindings.put("glo", global);
-        bindings.put("context", this);
-        scope = new ScopeState(evaluation.scripts(), bindings);
-        sync = org.bukkit.Bukkit.getServer() == null || org.bukkit.Bukkit.isPrimaryThread();
+        NiScripts scripts = evaluation.scripts();
+        synchronized (scripts) {
+            if (!scripts.isOpen())
+                throw new IllegalStateException("Script revision has been closed");
+            shared = new SharedState(scripts, caster, suppliedGlobal, params, active, this);
+            this.evaluation = evaluation.withActionCache(shared.global);
+        }
+        sync = primaryThread();
+    }
+
+    private NiActionContext(SharedState shared, NiEvaluation evaluation) {
+        this.shared = shared;
+        this.evaluation = evaluation;
+        sync = primaryThread();
+    }
+
+    private static boolean primaryThread() {
+        return Bukkit.getServer() == null || Bukkit.isPrimaryThread();
     }
 
     public NiEvaluation evaluation() {
@@ -135,32 +153,32 @@ public final class NiActionContext implements Cloneable {
     }
 
     public boolean active() {
-        return active.getAsBoolean();
+        return shared.active.getAsBoolean();
     }
 
     public Object getCaster() {
-        return caster;
+        return shared.caster;
     }
 
     public Player getPlayer() {
-        return caster instanceof Player player ? player : null;
+        return shared.caster instanceof Player player ? player : null;
     }
 
     public Map<String, Object> getGlobal() {
-        return global;
+        return shared.global;
     }
 
     public Map<String, Object> getParams() {
-        return params;
+        return shared.params;
     }
 
     public Map<String, Object> getBindings() {
-        synchronized (scope.scripts) {
-            return scope.resolve().bindings();
+        synchronized (shared.scripts) {
+            return shared.resolve().bindings();
         }
     }
 
-    public org.bukkit.inventory.ItemStack getItemStack() {
+    public ItemStack getItemStack() {
         return get(NiContextKeys.ITEM_STACK);
     }
 
@@ -172,13 +190,13 @@ public final class NiActionContext implements Cloneable {
         return get(NiContextKeys.DATA);
     }
 
-    public org.bukkit.event.Event getEvent() {
+    public Event getEvent() {
         return get(NiContextKeys.EVENT);
     }
 
     public Map<String, Object> getSectionCache() {
         Map<String, Object> cache = get(NiContextKeys.SECTION_CACHE);
-        return cache == null ? global : cache;
+        return cache == null ? shared.global : cache;
     }
 
     public static NiActionContext currentOrNull() {
@@ -186,12 +204,12 @@ public final class NiActionContext implements Cloneable {
     }
 
     public void refreshParams() {
-        synchronized (scope.scripts) {
-            if (params != null)
-                params.forEach(
-                        (key, value) -> {
-                            if (value != null) scope.put(key, value);
-                        });
+        synchronized (shared.scripts) {
+            if (shared.params == null) return;
+            shared.params.forEach(
+                    (name, value) -> {
+                        if (value != null) shared.bind(name, new Binding(true, value));
+                    });
         }
     }
 
@@ -199,53 +217,54 @@ public final class NiActionContext implements Cloneable {
         return sync;
     }
 
-    public void setSync(boolean value) {
-        sync = value;
+    public void setSync(boolean sync) {
+        this.sync = sync;
     }
 
     public boolean has(NiContextKey<?> key) {
-        return values.containsKey(key);
+        synchronized (shared.scripts) {
+            return shared.keys.containsKey(key);
+        }
     }
 
     @SuppressWarnings("unchecked")
     public <T> T get(NiContextKey<T> key) {
-        return (T) values.get(key);
+        synchronized (shared.scripts) {
+            return (T) shared.keys.get(key);
+        }
     }
 
     public <T> void set(NiContextKey<T> key, T value) {
-        synchronized (scope.scripts) {
-            values.put(key, value);
-            for (String name : key.getNames()) {
-                if (key.isPutInGlobal()) global.put(name, value);
-                scope.put(name, value);
-            }
+        synchronized (shared.scripts) {
+            shared.keys.put(key, value);
+            updateAliases(key, new Binding(true, value));
             if (key == NiContextKeys.SECTION_CACHE)
                 evaluation = evaluation.withActionCache(getSectionCache());
         }
     }
 
+    @SuppressWarnings("unchecked")
     public <T> T remove(NiContextKey<T> key) {
-        synchronized (scope.scripts) {
-            T previous = get(key);
-            values.remove(key);
-            for (String name : key.getNames()) {
-                if (key.isPutInGlobal()) global.remove(name);
-                scope.remove(name);
-            }
-            if (key == NiContextKeys.SECTION_CACHE) evaluation = evaluation.withActionCache(global);
+        synchronized (shared.scripts) {
+            T previous = (T) shared.keys.remove(key);
+            updateAliases(key, new Binding(false, null));
+            if (key == NiContextKeys.SECTION_CACHE)
+                evaluation = evaluation.withActionCache(shared.global);
             return previous;
+        }
+    }
+
+    private void updateAliases(NiContextKey<?> key, Binding binding) {
+        for (String name : key.getNames()) {
+            if (key.isPutInGlobal()) binding.apply(shared.global, name);
+            shared.bind(name, binding);
         }
     }
 
     @Override
     public NiActionContext clone() {
-        try {
-            NiActionContext result = (NiActionContext) super.clone();
-            result.sync =
-                    org.bukkit.Bukkit.getServer() == null || org.bukkit.Bukkit.isPrimaryThread();
-            return result;
-        } catch (CloneNotSupportedException impossible) {
-            throw new AssertionError(impossible);
+        synchronized (shared.scripts) {
+            return new NiActionContext(shared, evaluation);
         }
     }
 
@@ -257,89 +276,90 @@ public final class NiActionContext implements Cloneable {
         return new Builder();
     }
 
+    public String parse(String text) {
+        return invoke(
+                () -> {
+                    NiEvaluation parser =
+                            has(NiContextKeys.SECTIONS)
+                                    ? evaluation.withSections(
+                                            NiValues.config(get(NiContextKeys.SECTIONS)))
+                                    : evaluation;
+                    return parser.text(text);
+                });
+    }
+
+    public Object evaluate(String expression) {
+        if (!active()) throw new IllegalStateException("Action context is no longer active");
+        return invoke(() -> shared.scripts.evaluate(expression, shared.resolve()));
+    }
+
+    public <T> T invoke(Supplier<T> operation) {
+        synchronized (shared.scripts) {
+            NiActionContext previousCall = CURRENT.get();
+            Binding previousBinding = shared.binding("context");
+            CURRENT.set(this);
+            shared.bind("context", new Binding(true, this));
+            try {
+                return evaluation.scoped(operation);
+            } finally {
+                shared.bind("context", previousBinding);
+                if (previousCall == null) CURRENT.remove();
+                else CURRENT.set(previousCall);
+            }
+        }
+    }
+
+    public boolean condition(String expression) {
+        if (expression == null) return true;
+        try {
+            Object result = evaluate(expression);
+            if (result instanceof LegacyActionResult legacy) return !legacy.isStop();
+            if (result instanceof ActionFlow.Result flow) return !flow.stopped();
+            return Boolean.TRUE.equals(result);
+        } catch (RuntimeException error) {
+            evaluation.warning(
+                    "Action condition failed: " + expression + ": " + error.getMessage());
+            return false;
+        }
+    }
+
     public static final class Builder {
         private Object caster;
-        private Map<String, Object> global, params;
-        private final Map<NiContextKey<?>, Object> values = new HashMap<>();
+        private Map<String, Object> global;
+        private Map<String, Object> params;
+        private final Map<NiContextKey<?>, Object> keys = new HashMap<>();
 
-        public Builder caster(Object value) {
-            caster = value;
+        public Builder() {}
+
+        public Builder caster(Object caster) {
+            this.caster = caster;
             return this;
         }
 
-        public Builder global(Map<String, Object> value) {
-            global = value;
+        public Builder global(Map<String, Object> global) {
+            this.global = global;
             return this;
         }
 
-        public Builder params(Map<String, Object> value) {
-            params = value;
+        public Builder params(Map<String, Object> params) {
+            this.params = params;
             return this;
         }
 
         public <T> Builder with(NiContextKey<T> key, T value) {
-            values.put(key, value);
+            keys.put(key, value);
             return this;
         }
 
-        @SuppressWarnings({"rawtypes", "unchecked"})
         public NiActionContext build() {
-            NiActionContext result = new NiActionContext(caster, global, params);
-            values.forEach((key, value) -> result.set((NiContextKey) key, value));
-            return result;
+            NiActionContext context = new NiActionContext(caster, global, params);
+            keys.forEach((key, value) -> apply(context, key, value));
+            return context;
         }
-    }
 
-    public String parse(String text) {
-        // Keep the same lock order as evaluate: Nashorn callbacks may parse nodes recursively.
-        return invoke(
-                () ->
-                        (has(NiContextKeys.SECTIONS)
-                                        ? evaluation.withSections(
-                                                NiValues.config(get(NiContextKeys.SECTIONS)))
-                                        : evaluation)
-                                .text(text));
-    }
-
-    public Object evaluate(String expression) {
-        if (!active()) throw new IllegalStateException("Action revision is closed");
-        return invoke(() -> evaluation.scripts().evaluate(expression, scope.resolve()));
-    }
-
-    public <T> T invoke(java.util.function.Supplier<T> operation) {
-        synchronized (evaluation.scripts()) {
-            return scoped(() -> evaluation.scoped(operation));
-        }
-    }
-
-    private <T> T scoped(java.util.function.Supplier<T> operation) {
-        NiActionContext previous = CURRENT.get();
-        boolean hadContext = scope.contains("context");
-        Object previousBinding = scope.value("context");
-        scope.put("context", this);
-        CURRENT.set(this);
-        try {
-            return operation.get();
-        } finally {
-            if (hadContext) scope.put("context", previousBinding);
-            else scope.remove("context");
-            if (previous == null) CURRENT.remove();
-            else CURRENT.set(previous);
-        }
-    }
-
-    public boolean condition(String source) {
-        if (source == null) return true;
-        try {
-            Object result = evaluate(source);
-            if (result instanceof dev.itemloom.compat.ni.script.LegacyActionResult legacy)
-                return !legacy.isStop();
-            return result instanceof ActionFlow.Result flow
-                    ? !flow.stopped()
-                    : Boolean.TRUE.equals(result);
-        } catch (RuntimeException error) {
-            evaluation.warning("Action condition failed: " + source + ": " + error.getMessage());
-            return false;
+        @SuppressWarnings("unchecked")
+        private static <T> void apply(NiActionContext context, NiContextKey<T> key, Object value) {
+            context.set(key, (T) value);
         }
     }
 }

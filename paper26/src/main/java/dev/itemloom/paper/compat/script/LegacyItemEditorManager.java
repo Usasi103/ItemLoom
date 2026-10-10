@@ -641,11 +641,8 @@ public final class LegacyItemEditorManager {
     }
 
     public static short checkDurability(ItemStack item, int current, int max) {
-        short damage =
-                (short) (int) (item.getType().getMaxDurability() * (1 - (double) current / max));
-        if (damage <= 0 && current < max) damage = 1;
-        if (damage >= item.getType().getMaxDurability() && current > 0) damage--;
-        return damage;
+        return dev.itemloom.paper.compat.LegacyStateRules.damage(
+                item.getType().getMaxDurability(), current, max);
     }
 
     public static void refreshDurability(ItemStack item, int current, int max) {

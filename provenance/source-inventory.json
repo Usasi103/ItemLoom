@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2.4.0",
+  "version": "2.5.0",
   "review_date": "2026-10-10",
   "baseline_commit": "d5fc26d243dbfeb8517218c9b5b319d982c45cb0",
   "baseline_project_files_reviewed": 137,
@@ -83,9 +83,9 @@
       "sha256_lf": "0b9782e633d2ec529705d243ca81fc2a1d57f1c850a092f55d917501cb69d111"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/NiTextNodes.java": {
-      "classification": "retain-common-adapter",
-      "reason": "Modes/regex flags/output conventions mainly map grammar to JDK methods. Pattern cache is current ownership. Ordinary matcher/count/group glue does not justify wholesale rewrite.",
-      "sha256_lf": "a0aacacbd45ad60d1e6feb08bacec575de2b25caa68045bf8b4d08aa263ea99c"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract replacement of string/regex nodes: typed requests, strict arity decoders, operation registries and bounded flag-aware pattern cache. Retains field expansion order and ordinary Java string/regex semantics; old dispatch bodies removed.",
+      "sha256_lf": "10c57955ff785f7cdc8b5c95ed8ca98be56b1260191746aedc272d4ed503834a"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/NiYaml.java": {
       "classification": "retain-common-adapter",
@@ -93,9 +93,14 @@
       "sha256_lf": "8ee5437ef20c06e86b104369227a2f707b67b15491f72fddd4398d7ff92a54e8"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActionContext.java": {
-      "classification": "retain-distinct-implementation",
-      "reason": "Required aliases/shallow-clone semantics surround new lazy ScopeState, revision checks, metadata replay and scoped synchronized callbacks. Getters/builders are not copying evidence.",
-      "sha256_lf": "42f02d0bcb4666952349a20038d582315fb3d6f5fb2c9453377d1fdc86051673"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract replacement: explicit SharedState, binding-presence records and copy construction replace prior context/clone implementation. Supported constructors, lazy scope, shared variables, per-copy state and alias ordering remain as script contracts.",
+      "sha256_lf": "dc6c20a6a9c239eb528b05fcdd1f727e8f7c04e67b8cd6ec0d4842af82c92a74"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActionSyntax.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract implementation of typed action grammar with explicit/inferred schema priority and a nested form preserving each host dispatch boundary. Required keywords and precedence remain; no upstream execution framework retained.",
+      "sha256_lf": "7df682c4a0a70ad0ed8a03bbf96d76e802ad09557ad742205d51e5a0de2897db"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActionText.java": {
       "classification": "retain-distinct-implementation",
@@ -103,9 +108,9 @@
       "sha256_lf": "d04d8796a777e9583f65a93545829b1d607d186575b066c57d1c18ed9af4ce81"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActions.java": {
-      "classification": "retain-distinct-implementation",
-      "reason": "Compiler targets neutral ActionFlow combinators and host dispatch, replacing old concrete action hierarchy/run overloads. Type precedence and aliases remain format behavior.",
-      "sha256_lf": "92ce6a1fcf380667afaf7a5d08a1b78e90f3878c799cce37d08e727cf4d45494"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 grammar dispatch delegates to NiActionSyntax; displaced factory dispatch removed. Existing ActionFlow execution, scheduling, host operations and branch selection remain distinct surrounding implementation with current callers.",
+      "sha256_lf": "4cbecd4f19f80af8b4140aca33ac4f00473a7f73d49f889a05ff93623e2abc01"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiContextKey.java": {
       "classification": "retain-common-adapter",
@@ -117,10 +122,15 @@
       "reason": "Key constants are externally visible metadata vocabulary used by scripts/hosts.",
       "sha256_lf": "1c99fc5810678824ac834a91f023995cc2ba5d25b2bc261ce09babd15f3eca89"
     },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiValueSyntax.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract implementation separates decoded scalar/text/list/config inputs from evaluator compilation. Retains full-list validation, compile/runtime conversion timing, original singleton identity and empty js behavior.",
+      "sha256_lf": "fced5f7ccb2a746dfc27dd4ae91a3c79ba230e5e53c68b27e0c31525d878eae8"
+    },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiValues.java": {
-      "classification": "retain-common-algorithm-and-distinct-compiler",
-      "reason": "Function-based evaluators replace old evaluator classes; key/tree/contains wrap Java APIs. Small weighted-without-replacement sampler is common and lacks the distinctive combined arrangement of NiNodes.",
-      "sha256_lf": "f02bfd46163f910301e3f965796f52ca19b06d87fe4abd9b1b201836de10fb5d"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 compile grammar delegates to NiValueSyntax with branch/conversion functions; prior inline factory body removed. Existing selection/sampling and compileList remain supported execution policies, not part of the displaced grammar.",
+      "sha256_lf": "4f9df4bfe52748ce4b238db6a525db8b6350fe34cbdb2632992c86f80d5d1cdb"
     },
     "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyActionManager.java": {
       "classification": "retain-common-adapter",
@@ -173,9 +183,9 @@
       "sha256_lf": "1d53b3e0805a9cfa34bf11599a5bb79531b0ac48a65b7d360b61bd99ec5baecc"
     },
     "compat-sx/src/main/java/dev/itemloom/compat/sx/SxExpressions.java": {
-      "classification": "retain-distinct-implementation-with-common-adapters",
-      "reason": "Bounded recursive interpreter replaces Apache substitution handlers. Short lock/script/operators are behavior-constrained JDK/cache adapters; their order alone does not establish substantial copying.",
-      "sha256_lf": "78b19f8be522bedfff14caabec6b674894c409ad84d96f7b3fc2382b84a87f9c"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 removes private typed/lock bodies and integrates SxValueRules. Retains nested-expression traversal, current script/formula/branch/time integrations, random source and public handler accessors required by SX configurations.",
+      "sha256_lf": "7f4156135da5fe564d69a10b3e280b9f3f279cfad7a80072f0f349aaacceb6b3"
     },
     "compat-sx/src/main/java/dev/itemloom/compat/sx/SxMath.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -196,6 +206,11 @@
       "classification": "contract-replacement-or-reviewed-integration",
       "reason": "Fresh JSR223 scope lifecycle and routing implementation from initialization/calling contracts and public Nashorn API probes; explicit dependency is Nashorn.",
       "sha256_lf": "30ef69a22ce9a39a0f786782ab471e78c4b2329c0a052e14c0ea0a0cae0b75c0"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxValueRules.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract implementation: numeric decoder registry, parsed lock source and explicit cache transaction. Required wrapper names, empty choices, cache presence and commit timing remain behavior rather than copied method bodies.",
+      "sha256_lf": "65dee482eb7a0ed5e07b89d28c07c5384fd3635ed7fed2e9bbb39a8b0b91cb87"
     },
     "core/src/main/java/dev/itemloom/core/ActionFlow.java": {
       "classification": "I",
@@ -397,6 +412,11 @@
       "reason": "Fresh inventory requirement calculation from stack aggregation and duplicate-request behavior contracts.",
       "sha256_lf": "8b542a61523cfb48cde87ff8883db33a770af49a73ab6aaff395a55a4712bdc0"
     },
+    "paper26/src/main/java/dev/itemloom/paper/compat/LegacyStateRules.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract implementation of immutable schema-based numeric carry, damage quantization/visibility, size-first sequence comparison and composed item ordering. Retains required arithmetic/narrowing and comparison priority; standard JDK operations remain.",
+      "sha256_lf": "2ca8fa14d2378f8b9e8a509d82efc1a4d43ca13e4be73279be27743ff1e68b6d"
+    },
     "paper26/src/main/java/dev/itemloom/paper/compat/NiCatalog.java": {
       "classification": "INDEPENDENT_DESIGN_RETAIN",
       "reason": "Revision-owned lifecycle, transactional item reload, recipe ownership fences, event/order and script aliases. NI ItemGenerator/ScriptManager/ClientBoundData responsibilities are redistributed into immutable recipes and revision resources. display(264–295) is a short required viewer/roll binding bridge; its substantive template dependency is L4.",
@@ -438,9 +458,9 @@
       "sha256_lf": "0d1f34c0595aed806d8235ae45df5ec16e10065a05273c734e95c65e21e196e0"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/NiItemOperations.java": {
-      "classification": "INDEPENDENT_DESIGN_RETAIN",
-      "reason": "Regeneration is detached prepare/finish with thread/revision checks and concurrent mutation fences around callbacks. Reference rebuild/update ordering and charge/durability carry-over are observable policy, not evidence that this native transaction implementation is copied. Four-line preserveState overlap remains ordinary direct policy.",
-      "sha256_lf": "ce6837eb904e32730c86a95cf23359fca334ffc9097b9c7f4816699b16eb7527"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 replaces the early preserveState body with a LegacyStateRules snapshot integration. Retains identity/revision/source validation, generation and commit/refresh orchestration used by supported item operations; no old two-field fallback remains.",
+      "sha256_lf": "b0499a9e74638f45c68f12d472923fba7e28529adf6b4120449b7c07eaeed541"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/NiItemRegistry.java": {
       "classification": "INDEPENDENT_DESIGN_RETAIN",
@@ -484,13 +504,13 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbt.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Removed escaped-path scanner; delegates to EscapedPath. Retained validated candidate commits, linked-child snapshots and typed adapters serve the supported script contract.",
-      "sha256_lf": "e1e0586cd0fe39e0aff1789c590c7e76cbb7c3407d229fcc609273d3c0c36547"
+      "reason": "2.5 replaces the retained Compound/ListValue comparison bodies with shared ordered comparison and JDK entry comparators. NMS-backed data views, supported legacy accessors, escaping and recursive editor integrations remain; names/layouts serve scripts and persisted data.",
+      "sha256_lf": "f38e921ea462d98c54e30b18a26756c0a4d0165b490cb882faabe62f0fe197d8"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbtItemStack.java": {
-      "classification": "INDEPENDENT_DESIGN_RETAIN",
-      "reason": "Live projection bridge uses three-way per-key conflict merge, validated ItemLoom envelope translation, unknown state preservation and sole native component commit. Clone/getter/comparison signatures and size/type ordering are ordinary compatibility API; no upstream reflection wrapper retained.",
-      "sha256_lf": "cadea7677676b755e93a351885a1758194f59558a9136ff5900c319e5c2b13d5"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 replaces the early compareTo body with a composed LegacyStateRules comparator. Retains the modern item/legacy-tag translation boundary and persistence vocabulary; item type/count/damage/tag order and lazy reads are supported behavior.",
+      "sha256_lf": "c0c5ab3162c87775e4d2b32489ba95b278e886178f2879960a15a4af3ca33b9b"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbtUtils.java": {
       "classification": "COMMON_ADAPTER_RETAIN",
@@ -554,8 +574,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemEditorManager.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Removed literal selection/output assembly; delegates to LegacyLiteralText. Retained supported editor routing, native component commits and previously replaced regex transformer.",
-      "sha256_lf": "a54a4687bf049add032697ceae09e8367503656a71ea088357056efe23d68928"
+      "reason": "2.5 replaces retained checkDurability arithmetic body with LegacyStateRules integration. Existing script registrations, modern NMS edits and earlier text/regex replacements retain active callers and supported names; wrapper signature remains for scripts.",
+      "sha256_lf": "585f2ad9684636fa54a9c887fc594f4ac931c09ff99422c53d9f2de0cc42b7b7"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemEditorManagerNbt.java": {
       "classification": "REVIEWED_2_1_RETAIN",
@@ -732,6 +752,11 @@
       "reason": "SX aliases/scripts/lock values/update flags/protect paths kept as format behavior. Bounded alias resolution, revision-owned scripts, clone/equality commit and modern component path protection differ from upstream IUpdate/ItemManager; map path traversal is routine. No demonstrated substantive copy kernel beyond declared historical format influence.",
       "sha256_lf": "2d0af8a17d47dd81c2de1069060b1bc72ab0f6ba6293e69831da977316ddfb93"
     },
+    "paper26/src/main/java/dev/itemloom/paper/sx/SxFieldPlan.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 contract implementation: prepared ordered field edits, effect records, pure decoders and explicit metadata/NMS transitions. Retains field order, external omissions, component/NBT precedence and UUID representation; old field-application body removed from recipe.",
+      "sha256_lf": "06d9e29833e082864b3b16757227eeb1552963e6fe9f18fcb8453bff2cb7a825"
+    },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxMaintenance.java": {
       "classification": "F",
       "reason": "Same activity-driven once-per-second maintenance intent as SX ItemManager, with UUID dedup queue, publication fences, refresh and throttled failures. Queue snapshot/clear/visit is common event-batching mechanics and insufficient alone for copying finding.",
@@ -743,9 +768,9 @@
       "sha256_lf": "cd8f4d65c499d3df27fd3e2a9a2c6a9098a677adda77fc594925595855b250bd"
     },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxPaperRecipe.java": {
-      "classification": "F",
-      "reason": "Full generator reviewed against GeneratorDefault/Import: fields, defaults, durability formulas, flag aliases, ProtectNBT plus ! removal and AttributeModifiers.UUID int-array conversion are source-informed format rules. Strict field validation, owned prototypes/dynamic detection, direct component edits and changed potion/attribute paths are different structure. Field-by-field Bukkit setter sequence and short type conversions are insufficient substantive-copy evidence; not independent-history certification.",
-      "sha256_lf": "aa2afbc5e048ef646d89d79df5b0582be52b8bc079effbc40312fe490cbb7a96"
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "2.5 replaces field-generation body with SxFieldPlan; removes old potion and UUID conversion helpers. Retains provider/prototype lifecycle, material selection, static validation and ItemLoom identity. External providers are called per generation and cloned.",
+      "sha256_lf": "81e44467bc865879b987102a64a679b612c4b4a804e5ed802a855c534a118129"
     },
     "vendor/itembridge/src/main/java/cn/gtemc/itembridge/hook/HookHelper.java": {
       "classification": "attributed-dependency-customization",
@@ -949,9 +974,9 @@
       "sha256_lf": "19d0d1e0f1b65905627b0eefbab27cb22d677cd49b63ac22b43b1a3d8fdb9cd4"
     },
     "NOTICE.md": {
-      "classification": "attributed-legal-text",
-      "reason": "Close located SnakeYAML source gap with precise revision and verification boundary; preserve NI/SX history, GPL and third-party attribution.",
-      "sha256_lf": "c581aad5eac0834a3fb90c729f19c4eea9b7fcf30ccc2fc7b3ae2a0e8fcb5f3d"
+      "classification": "reviewed-support-input",
+      "reason": "Preserves GPL and historical NI/SX/dependency attribution; documents targeted 2.5 contract replacements, revised retention decisions and coordinator source exposure without claiming clean-room authorship.",
+      "sha256_lf": "d2ede73c962bf4a3fe9abe14c59ded6300b5e6a13706c55ed177722f129041da"
     },
     "build.gradle.kts": {
       "classification": "reviewed-build-input",
@@ -974,9 +999,9 @@
       "sha256_lf": "333b191e8329f48339539fadde24d3f997a7f8c6a3b6bfe9a20298cd26f98118"
     },
     "gradle.properties": {
-      "classification": "reviewed-build-input",
-      "reason": "Formal 2.4.0 release version; Java/runtime settings unchanged.",
-      "sha256_lf": "edcc47f52807abf262a224fdc5647a09c19b1a9dd5d7eddd8ec3dfe6197e682e"
+      "classification": "reviewed-support-input",
+      "reason": "Release 2.5.0; configured Java/Paper and dependency versions remain unchanged.",
+      "sha256_lf": "ad6439da8cab9eb9cc4f6c036a792532bde0ce027dfc2ff781e5fbfeb132d956"
     },
     "gradle/wrapper/gradle-wrapper.jar": {
       "classification": "retained-build-bootstrap",
@@ -1163,5 +1188,11 @@
       "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
       "sha256_lf": "5df296839b23ffb20924dad62fe68e4be832fd7b8d7bf5cb3b649b51ea2ebcb6"
     }
+  },
+  "follow_up_2_5": {
+    "baseline_commit": "15d156af64a1ac7e5bf55625039eff3121de4fb2",
+    "scope": "Five retained state/comparison methods and five NI/SX frontend groups identified by the renewed early-adapter comparison.",
+    "process": "Fresh workers used behavioral contracts and allowed adjacent APIs/tests, without reading displaced bodies; coordinator had source exposure and integrated the results.",
+    "limit": "Targeted engineering replacements revise prior retention decisions, not legal authorship or clean-room certification."
   }
 }
