@@ -121,7 +121,7 @@ SXExample:
 |---|---|
 | 内置生成器 | `Default`（缺省）与 `Import`；Import 的 `Item` 为 Bukkit 序列化 ItemStack，按次复制，不解析随机节点 |
 | 外观与数据 | `ID/Id/id`（规范 `ID` 优先）、ID 列表、Name、Lore、Amount、Durability、EnchantList、ItemFlagList、Unbreakable、SkullName、Color、Potion、CustomModelData、ClearAttribute、Attributes、NBT、Components |
-| 材质/耐久 | 现代材质、旧数字/名称与数据值；`material:damage`、绝对损耗、`<剩余值`、剩余百分比；旧输入由 Paper 转为现代物品，不提供旧服务器适配 |
+| 材质/耐久 | 现代材质、旧数字/名称与数据值；`material:damage`、绝对损耗、`<剩余值`、剩余百分比；旧输入按 Paper 26.2 的预生成映射转为现代物品，不提供旧服务器适配 |
 | 随机 | 局部 Random / 全局 RandomString、权重、多行组、局部 null 回退全局；`l` 锁定本次结果，调用参数优先；未命中节点删除所在 Lore 行 |
 | 表达式 | 嵌套 `s/l/i/r/d/b/c/min/max/eq/like/cmp/if/when/null/u/t/j`；`[byte/short/int/long/float/double]` 数值转换；`$<…>` 转义 |
 | 脚本/PAPI | JS 文件与 Global 作用域，`<j:File.function#args>` 调用 `function(handler,args)`；参数中在线玩家名字转玩家对象。真实 PAPI 在生成时按 viewer 解析，不回写 YAML |
@@ -136,7 +136,7 @@ SX 的 `Config.yml` 读取 `DecimalPrecision`（0–12）、`TimeFormat`、`Scri
 - `NBT` 位于现代 custom_data，`Components` 使用 26.2 原生结构；不会把所有旧版本 NBT 或旧 food 等组件结构自动升级。ProtectNBT 的普通路径支持 compound 的点路径，不支持列表索引；不允许保护 ItemLoom 自身身份或整个 custom_data 组件。
 - 新物品只写入 `itemloom:items` 标识；本版不自动接管旧 SX 插件已经生成的背包物品。NI 脚本物品管理器、NI ItemPacks 的内部物品引用和 `%ni_parse_*%` 仍使用 NI 前端，不能视作 SX 管理接口。
 - 修正原版别名指向失效、全负数 max 与药水效果选错；未知材质/附魔/flag、非正数量、空/非法权重显式报错。Lore 转义按一次解析保留字面文本，避免原版二次解析吞掉转义；不复现有缺陷的计算器边缘行为。组件错误会报告，纯静态定义会在重载准备时构建验证；随机/脚本定义不提前试抽。
-- 旧数字/旧名称材质首次转换会初始化 Paper 的 legacy 材质映射，可能阻塞主线程数秒。只用现代材质名的配置不进入此转换路径，已转换值会缓存。动态材质首次命中旧 ID 时也可能触发初始化，因此建议旧材质配置在维护时加载验证。
+- 旧数字/旧名称材质通过内置的 Paper 26.2 映射表解析，普通生成不再初始化 Paper 的 legacy 转换器。现代名称继续优先；数据值与耐久后缀保留原语义。该改进不限制任意脚本或外部插件的执行耗时。
 
 读取配置、生成物品和自动更新均不改写来源文件。NI 和 SX 的完整重载共用一次发布；普通配置错误、脚本加载错误、别名循环和 ID 冲突不会替换当前可用目录。
 

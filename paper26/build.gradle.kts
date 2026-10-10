@@ -1,4 +1,7 @@
 import java.security.MessageDigest
+import groovy.json.JsonSlurper
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 
 plugins {
     `java-library`
@@ -43,6 +46,44 @@ dependencies {
 
 sourceSets.main { java.srcDir(rootProject.file("vendor/itembridge/src/main/java")) }
 
+val verifyRuntimeInputs by tasks.registering {
+    val inventory = rootProject.file("provenance/runtime-dependencies.json")
+    inputs.file(inventory)
+    inputs.files(configurations.runtimeClasspath)
+    doLast {
+        val manifest = JsonSlurper().parse(inventory) as Map<*, *>
+        val expected = (manifest["runtime_artifacts"] as List<*>).associate {
+            val row = it as Map<*, *>
+            row["coordinate"].toString() to row["sha256"].toString()
+        }
+        val actual = configurations.runtimeClasspath.get().incoming.artifacts.artifacts
+            .mapNotNull { artifact ->
+                val component = artifact.id.componentIdentifier
+                if (component !is ModuleComponentIdentifier) {
+                    val input = artifact.file.canonicalFile
+                    if (component is ProjectComponentIdentifier) {
+                        check(component.projectPath in setOf(":core", ":compat-ni", ":compat-sx", ":keystone-runtime")) {
+                            "Unreviewed runtime project: $component"
+                        }
+                        val expectedJar = project(component.projectPath).tasks.named<Jar>("jar")
+                            .get().archiveFile.get().asFile.canonicalFile
+                        check(input == expectedJar) { "Unexpected runtime project artifact: $input" }
+                    } else {
+                        check(input == itemBridgeRuntime.get().archiveFile.get().asFile.canonicalFile) {
+                            "Unreviewed runtime file dependency: $input"
+                        }
+                    }
+                    return@mapNotNull null
+                }
+                val key = "${component.group}:${component.module}:${component.version}"
+                val hash = MessageDigest.getInstance("SHA-256").digest(artifact.file.readBytes())
+                    .joinToString("") { "%02x".format(it) }
+                key to hash
+            }.toMap()
+        check(actual == expected) { "Runtime dependency inputs changed; review exact binaries, sources and legal notices" }
+    }
+}
+
 tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
 tasks.jar { manifest.attributes["paperweight-mappings-namespace"] = "mojang" }
 
@@ -52,6 +93,7 @@ tasks.processResources {
 }
 
 tasks.shadowJar {
+    dependsOn(verifyRuntimeInputs)
     archiveFileName.set("ItemLoom-${project.version}.jar")
     archiveClassifier.set("plugin")
     relocate("dev.keystone", "dev.itemloom.internal.keystone")
@@ -64,6 +106,8 @@ tasks.shadowJar {
     exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class", "META-INF/versions/*/module-info.class")
     from(rootProject.file("LICENSE"))
     from(rootProject.file("NOTICE.md"))
+    from(rootProject.file("licenses")) { into("META-INF/licenses") }
+    from(rootProject.file("provenance/runtime-dependencies.json")) { into("META-INF/licenses") }
     from(rootProject.file("vendor/itembridge/README.md")) {
         into("META-INF/licenses")
         rename { "itembridge-modifications.md" }

@@ -1,18 +1,15 @@
 package dev.itemloom.paper.sx;
 
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
-import org.bukkit.Bukkit;
+import java.util.regex.Pattern;
 import org.bukkit.Material;
-import org.bukkit.material.MaterialData;
 
 /** Legacy identifiers are configuration data; only modern Paper materials leave this boundary. */
-@SuppressWarnings({"deprecation", "removal"})
 final class SxMaterials {
     record Resolved(Material material, String damage) {}
 
-    private static final Map<String, Material> CACHE = new HashMap<>();
+    private static final Pattern SUFFIX =
+            Pattern.compile("(?:<[+-]?\\d+|[+-]?\\d+|[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)%)");
+    private static final Pattern UNSIGNED = Pattern.compile("\\d+");
 
     private SxMaterials() {}
 
@@ -23,27 +20,22 @@ final class SxMaterials {
         String base = text, suffix = null;
         if (colon > 0) {
             String candidate = text.substring(colon + 1);
-            if (candidate.matches("(?:<[+-]?\\d+|[+-]?\\d+|[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)%)")) {
+            if (SUFFIX.matcher(candidate).matches()) {
                 base = text.substring(0, colon);
                 suffix = candidate;
             }
         }
         Material material = modern(base);
         if (material == null) {
-            int data = suffix != null && suffix.matches("\\d+") ? Integer.parseInt(suffix) : 0;
-            String key = base + ':' + data;
-            material = CACHE.get(key);
-            if (material == null) {
-                Material legacy = null;
-                if (base.matches("\\d+")) {
-                    int id = Integer.parseInt(base);
-                    legacy = LegacyIds.BY_ID.get(id);
-                } else legacy = LegacyIds.BY_NAME.get("LEGACY_" + base.toUpperCase(Locale.ROOT));
-                if (legacy != null && data <= 255)
-                    material =
-                            Bukkit.getUnsafe()
-                                    .fromLegacy(new MaterialData(legacy, (byte) data), true);
-                if (material != null && !material.isAir()) CACHE.put(key, material);
+            int data =
+                    suffix != null && UNSIGNED.matcher(suffix).matches()
+                            ? Integer.parseInt(suffix)
+                            : 0;
+            if (data <= 255) {
+                material =
+                        UNSIGNED.matcher(base).matches()
+                                ? LegacyTableHolder.TABLE.byId(Integer.parseInt(base), data)
+                                : LegacyTableHolder.TABLE.byName(base, data);
             }
         }
         if (material == null || material.isAir() || !material.isItem())
@@ -51,22 +43,14 @@ final class SxMaterials {
         return new Resolved(material, suffix);
     }
 
-    private static final class LegacyIds {
-        static final Map<Integer, Material> BY_ID = new HashMap<>();
-        static final Map<String, Material> BY_NAME = new HashMap<>();
-
-        static {
-            // Paper rewrites Material.values() in modern plugins to omit legacy constants.
-            // Enum metadata retains the input IDs needed for this configuration adapter.
-            for (Material material : Material.class.getEnumConstants())
-                if (material.isLegacy()) {
-                    BY_ID.put(material.getId(), material);
-                    BY_NAME.put(material.name(), material);
-                }
-        }
+    private static final class LegacyTableHolder {
+        static final LegacyMaterialTable TABLE = LegacyMaterialTable.load();
     }
 
     private static Material modern(String key) {
+        // Material names cannot begin with an ASCII digit. Avoid Paper's normalization
+        // and regex allocation for the common numeric configuration path.
+        if (key.isEmpty() || (key.charAt(0) >= '0' && key.charAt(0) <= '9')) return null;
         Material material = Material.matchMaterial(key);
         return material != null && !material.isLegacy() && material.isItem() && !material.isAir()
                 ? material

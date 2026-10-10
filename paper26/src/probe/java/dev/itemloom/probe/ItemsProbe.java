@@ -33,6 +33,10 @@ public final class ItemsProbe extends JavaPlugin {
             var reference = getServer().getPluginManager().getPlugin("NeigeItems");
             CompletionStage<Map<String, Object>> result =
                     switch (mode) {
+                        case "legacy-materials" ->
+                                CompletableFuture.completedFuture(
+                                        LegacyMaterialsProbe.run(
+                                                this, args.length > 1 ? args[1] : "bench"));
                         case "itembridge" ->
                                 CompletableFuture.completedFuture(ItemBridgeProbe.run(this));
                         case "external-material" ->

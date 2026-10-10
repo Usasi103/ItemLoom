@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--forbid-text", action="append", default=[], help="Case-insensitive text forbidden in any JAR entry or payload")
     args = parser.parse_args()
     violations = []
+    project = Path(__file__).resolve().parents[1]
+    dependency_manifest = json.loads((project / "provenance/runtime-dependencies.json").read_text(encoding="utf-8"))
     with ZipFile(args.jar) as jar:
         names = jar.namelist()
         classes = [name for name in names if name.endswith(".class")]
@@ -37,6 +39,9 @@ def main():
             violations.extend(name for name in names if name.startswith(prefix))
         for name in classes:
             data = jar.read(name)
+            if name.startswith("dev/itemloom/paper/sx/") and any(
+                    marker in data for marker in (b"fromLegacy", b"org/bukkit/material/MaterialData", b"CraftLegacy")):
+                violations.append(f"{name}: runtime legacy initialization path returned")
             if name.startswith("dev/itemloom/core/"):
                 for dependency in (b"org/bukkit/", b"net/minecraft/", b"dev/itemloom/compat/", b"dev/itemloom/paper/"):
                     if dependency in data:
@@ -61,9 +66,24 @@ def main():
         if any(name.startswith('cn/gtemc/itembridge/') for name in names):
             violations.append('Unrelocated ItemBridge')
         for notice in ("LICENSE", "NOTICE.md", "META-INF/licenses/itembridge-MIT.txt",
-                       "META-INF/licenses/itembridge-modifications.md"):
+                       "META-INF/licenses/itembridge-modifications.md",
+                       "META-INF/licenses/runtime-dependencies.json",
+                       "compat-sx/legacy-materials-26.2.tsv"):
             if notice not in names:
                 violations.append(f"Missing source license/provenance notice: {notice}")
+        for name, row in dependency_manifest["packaged_notices"].items():
+            if name not in names:
+                violations.append(f"Missing complete dependency notice: {name}")
+            elif hashlib.sha256(jar.read(name).decode("utf-8").replace("\r\n", "\n").encode("utf-8")).hexdigest() != row["sha256_lf"]:
+                violations.append(f"Dependency notice content differs: {name}")
+        embedded_manifest = "META-INF/licenses/runtime-dependencies.json"
+        if embedded_manifest in names and json.loads(jar.read(embedded_manifest)) != dependency_manifest:
+            violations.append("Packaged dependency inventory differs from reviewed inputs")
+        material_table = "compat-sx/legacy-materials-26.2.tsv"
+        if material_table in names:
+            expected_table = (project / "paper26/src/main/resources" / material_table).read_text(encoding="utf-8")
+            if jar.read(material_table).decode("utf-8").replace("\r\n", "\n") != expected_table:
+                violations.append("Packaged legacy material observations differ from reviewed resource")
     with args.jar.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     report = {

@@ -5,8 +5,9 @@ The 2.2.0 review covered all 137 production Java files present in ItemLoom 2.1.0
 The review read executable bodies and compared relevant upstream responsibilities;
 it did not use a text-overlap percentage as an originality test.
 
-`source-inventory.json` records each current production input, its retention or
-replacement reason, and a SHA-256 over UTF-8 text with LF newlines. The inventory
+`source-inventory.json` records each current production Java input, main resource,
+maintained build/release input and legal text, its retention or replacement
+reason, and a SHA-256 over UTF-8 text with LF newlines (binary hashes for JARs). The inventory
 also identifies vendored Keystone and the ItemBridge discovery customization.
 Run `python -B tools/verify_source_review.py` to detect missing or changed inputs.
 This checks the recorded review boundary; it does not determine legal authorship.
@@ -35,16 +36,27 @@ region and the reason for retaining the surrounding implementation.
 
 ## Dependencies and limits
 
+The 2.3.0 follow-up extends the earlier review to production resources, maintained
+build inputs and release tools. It adds the [Paper material observation record](legacy-materials.md)
+and [exact included dependency inventory](runtime-dependencies.json), complete
+version-matched dependency notices, and guards against unreviewed binary inputs
+or missing/changed packaged notices. Earlier 2.2.0 JARs omitted some of those
+complete texts; 2.3.0 corrects that distribution gap without rewriting published
+history. No additional substantive NI/SX implementation-copy finding was
+established in this bounded follow-up; required aliases and reviewed ordinary
+adapters remain for their supported contracts.
+
 Keystone is an attributed source dependency, verified against its own manifest.
 ItemBridge's original MIT-licensed binary is pinned by hash; the build removes
 its NI/SX provider classes and original discovery class, compiling the attributed
 discovery customization instead. Other ItemBridge providers are upstream code.
 Nashorn, ASM and Sparrow YAML remain disclosed runtime libraries. See [NOTICE](../NOTICE.md).
 
-Build scripts, packaged resources, fixtures, tests and development tools are
-reviewed by responsibility and public-content checks; the per-file Java manifest
-does not purport to inventory third-party binary contents or certify every test
-as independently authored. The artifact check separately rejects NI/SX plugin
+Fixtures and tests are reviewed by responsibility and public-content checks; the
+inventory does not certify every test as independently authored. Included
+dependency binaries are pinned separately. The exact modified source for
+Sparrow's embedded SnakeYAML fork has not been located; that limitation remains
+explicit in the dependency records. The artifact check separately rejects NI/SX plugin
 classes, direct JVM type links, excluded providers and obsolete helper resources.
 
 The comparisons include the available NI Kotlin sources, the maintained Java

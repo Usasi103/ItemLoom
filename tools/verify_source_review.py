@@ -11,6 +11,29 @@ PROJECT = Path(__file__).resolve().parents[1]
 MODULES = ("core", "compat-ni", "compat-sx", "paper26", "vendor/keystone", "vendor/itembridge")
 
 
+def support_inputs() -> dict[str, Path]:
+    paths = set()
+    for module in MODULES:
+        resources = PROJECT / module / "src/main/resources"
+        paths.update(path for path in resources.rglob("*") if path.is_file())
+        paths.update((PROJECT / module).glob("*.gradle.kts"))
+    for folder in ("licenses", "gradle", "tools"):
+        paths.update(path for path in (PROJECT / folder).rglob("*")
+                     if path.is_file() and "__pycache__" not in path.parts)
+    for name in ("build.gradle.kts", "settings.gradle.kts", "gradle.properties",
+                 "gradlew", "gradlew.bat", "LICENSE", "NOTICE.md",
+                 "provenance/runtime-dependencies.json",
+                 "vendor/keystone/LICENSE", "vendor/keystone/README.md", "vendor/keystone/upstream.json",
+                 "vendor/itembridge/README.md", "vendor/itembridge/LICENSE"):
+        paths.add(PROJECT / name)
+    return {path.relative_to(PROJECT).as_posix(): path for path in paths}
+
+
+def digest(path: Path) -> str:
+    data = path.read_bytes() if path.suffix == ".jar" else path.read_text(encoding="utf-8").encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
 def verify() -> list[str]:
     manifest = json.loads((PROJECT / "provenance/source-inventory.json").read_text(encoding="utf-8"))
     version = next(line.partition("=")[2].strip() for line in
@@ -19,10 +42,11 @@ def verify() -> list[str]:
     failures = []
     if manifest.get("version") != version:
         failures.append("Source review version differs from the project version")
-    reviewed = manifest["files"]
+    reviewed = {**manifest["files"], **manifest.get("support_files", {})}
     actual = {path.relative_to(PROJECT).as_posix(): path
               for module in MODULES
               for path in (PROJECT / module / "src/main/java").rglob("*.java")}
+    actual.update(support_inputs())
     for name in sorted(set(actual) - set(reviewed)):
         failures.append(f"Unreviewed production input: {name}")
     for name in sorted(set(reviewed) - set(actual)):
@@ -31,12 +55,11 @@ def verify() -> list[str]:
         row = reviewed[name]
         # Git may check text out with CRLF on Windows. The manifest hashes UTF-8 text
         # with LF newlines so the public source archive and both checkouts agree.
-        source = actual[name].read_text(encoding="utf-8").encode("utf-8")
-        if hashlib.sha256(source).hexdigest() != row.get("sha256_lf"):
+        if digest(actual[name]) != row.get("sha256_lf", row.get("sha256")):
             failures.append(f"Source changed after review: {name}")
         if not row.get("classification") or not row.get("reason"):
             failures.append(f"Missing review decision: {name}")
-    print(f"Production source inventory: {len(actual)} files; {len(failures)} problem(s)")
+    print(f"Production source/build/resource inventory: {len(actual)} files; {len(failures)} problem(s)")
     for failure in failures:
         print(failure, file=sys.stderr)
     return failures

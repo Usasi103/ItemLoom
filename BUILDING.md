@@ -54,9 +54,23 @@ discovery API together before updating this dependency; the artifact audit rejec
 adapters and direct NI/SX type references.
 
 The production Java review inventory is under `provenance/`. After reviewing a
-source change, update its decision and LF-normalized hash. Run
+source change, update its decision and LF-normalized hash. It also covers main
+resources, legal texts, maintained build inputs and release tools. Run
 `python -B tools/verify_source_review.py`; release preparation requires this check.
 It verifies review coverage and hashes, not authorship or legal originality.
+
+`provenance/runtime-dependencies.json` pins the seven resolved included runtime
+artifacts by SHA-256 and records their official source URLs. `shadowJar` verifies
+that exact set before packaging. Version-matched complete legal texts from
+`licenses/` are included in the JAR and checked by content hash. ItemBridge has
+its separate original-input check. Review source and license changes together
+when updating dependencies; the exact-source gap for Sparrow's embedded
+SnakeYAML fork is explicitly recorded, not replaced by a stock-source claim.
+
+The legacy material table is generated from the target Paper API. See
+[its observation record](provenance/legacy-materials.md) for regeneration and
+exhaustive checking. The oracle/export probe may stall for Paper initialization;
+the normal generation path must not call it.
 
 Do not add server plugin binaries or paid integration JARs to the repository. Optional
 runtime integrations must be installed separately in a test server that you control.

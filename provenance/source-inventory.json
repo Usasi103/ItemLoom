@@ -1,15 +1,15 @@
 {
-  "schema_version": 1,
-  "version": "2.2.0",
+  "schema_version": 2,
+  "version": "2.3.0",
   "review_date": "2026-10-10",
   "baseline_commit": "d5fc26d243dbfeb8517218c9b5b319d982c45cb0",
   "baseline_project_files_reviewed": 137,
-  "scope": "All current production Java in core, compat-ni, compat-sx, paper26 and vendored source modules.",
+  "scope": "All production Java and main resources; maintained Gradle/wrapper/release inputs and legal texts; exact included runtime binary manifest.",
   "limits": [
     "Retention is an engineering review decision, not proof of historical independent authorship.",
     "Contracts and permitted API surfaces were supplied to fresh implementation workers; coordinator had source exposure.",
     "No legal clean-room certification; GPL, upstream attribution and public history remain.",
-    "Dependency binaries and non-production files have separate responsibility/artifact review, not per-file Java hashes."
+    "Exact dependency binary inputs are reviewed separately; tests/fixtures are not certified as independently authored. Exact modified source for the embedded SnakeYAML fork has not been located."
   ],
   "files": {
     "compat-ni/src/main/java/dev/itemloom/compat/ni/NiArithmetic.java": {
@@ -722,6 +722,11 @@
       "reason": "Direct 26.2 custom-data/component codecs, safe candidate patch replacement and Java scalar/list/array-to-Tag conversion. NBT type dispatch mirrors platform type universe, not upstream item-language algorithms. Craft mirror empty replacement fix is explicit independent adaptation.",
       "sha256_lf": "ef3126d0b87d626fa1ae42618238d4aa64ed7d08aa032aac50e91dd8a82c11f6"
     },
+    "paper26/src/main/java/dev/itemloom/paper/sx/LegacyMaterialTable.java": {
+      "classification": "reviewed-platform-data-adapter",
+      "reason": "New immutable run-table reader and lookup over explicitly recorded Paper API observations; no NI/SX or Paper converter source copied. Strict resource validation and no runtime legacy conversion.",
+      "sha256_lf": "6098086ba6e5b4aebe07e7563826b15137a1ea97c00c0513da9ea543b3c2c673"
+    },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxCatalog.java": {
       "classification": "F",
       "reason": "SX aliases/scripts/lock values/update flags/protect paths kept as format behavior. Bounded alias resolution, revision-owned scripts, clone/equality commit and modern component path protection differ from upstream IUpdate/ItemManager; map path traversal is routine. No demonstrated substantive copy kernel beyond declared historical format influence.",
@@ -733,9 +738,9 @@
       "sha256_lf": "780b236043655c98735fd63507d265a3f05ac1acb0904f6fdf9e55c81fd510b0"
     },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxMaterials.java": {
-      "classification": "F",
-      "reason": "Modern material exact-match priority, numeric/legacy ID support, inline damage syntax and namespace handling are observable compatibility. Regex suffix validation and Paper enum-metadata caches differ from XMaterial path; standard Material APIs.",
-      "sha256_lf": "70d787675a2010e8315d5c5bbc40ffaedfea07e94656339c9b7786fcf73b0802"
+      "classification": "reviewed-platform-data-adapter",
+      "reason": "Supported suffix/modern-name precedence retained; runtime CraftLegacy conversion and mutable cache removed. Precompiled syntax and lazy immutable Paper observations replace the expensive conversion path.",
+      "sha256_lf": "cd8f4d65c499d3df27fd3e2a9a2c6a9098a677adda77fc594925595855b250bd"
     },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxPaperRecipe.java": {
       "classification": "F",
@@ -931,6 +936,212 @@
       "classification": "attributed-dependency-source",
       "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
       "sha256_lf": "687abf82a27e3eaa4d83331f98a1f17a47b4188e4882a4454633ddd0ff49aebe"
+    }
+  },
+  "incremental_review": {
+    "baseline_commit": "88e34fd66ccbc3a8d3975c94ce507bf50f706b49",
+    "scope": "Legacy material resolver, observed platform mapping, dependency license and build/resource distribution boundaries; previous Java decisions retained for unchanged files."
+  },
+  "support_files": {
+    "LICENSE": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "19d0d1e0f1b65905627b0eefbab27cb22d677cd49b63ac22b43b1a3d8fdb9cd4"
+    },
+    "NOTICE.md": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "3e90ef8443e19a2a1b521cd2a483010f54b7c84e445819949f7c83927388946b"
+    },
+    "build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "df7860066acb405c564c4ef0f1186d1147258c85b055689db05bc7fc59467345"
+    },
+    "compat-ni/build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "bbef728593df76ee5acdcb84c38dc0b2bb2cb3dae5e703f8dc0961d0cc3f3f07"
+    },
+    "compat-sx/build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "5d11008b922e11ec9eb83f52acb288d5cf489aec207ed37c5e279aca29a43e61"
+    },
+    "core/build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "333b191e8329f48339539fadde24d3f997a7f8c6a3b6bfe9a20298cd26f98118"
+    },
+    "gradle.properties": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "12df6119de87098a83200d79d77d18c2597ae94e601ee6f13550df8a6129e369"
+    },
+    "gradle/wrapper/gradle-wrapper.jar": {
+      "classification": "retained-build-bootstrap",
+      "reason": "Existing Gradle wrapper/bootstrap required for reproducible public builds; supplied Gradle copyright/license notices retained. Binary is a build tool, never a plugin runtime input.",
+      "sha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17"
+    },
+    "gradle/wrapper/gradle-wrapper.properties": {
+      "classification": "retained-build-bootstrap",
+      "reason": "Existing Gradle wrapper/bootstrap required for reproducible public builds; supplied Gradle copyright/license notices retained. Binary is a build tool, never a plugin runtime input.",
+      "sha256_lf": "a180163249c7252412ddaee1c7adcf59f6494b1183136f690fbd9a3b8aaed00e"
+    },
+    "gradlew": {
+      "classification": "retained-build-bootstrap",
+      "reason": "Existing Gradle wrapper/bootstrap required for reproducible public builds; supplied Gradle copyright/license notices retained. Binary is a build tool, never a plugin runtime input.",
+      "sha256_lf": "a3648413b47ef77af21d5ebc36c687c7d103aaef3e17f33de7d4f080a6f300a3"
+    },
+    "gradlew.bat": {
+      "classification": "retained-build-bootstrap",
+      "reason": "Existing Gradle wrapper/bootstrap required for reproducible public builds; supplied Gradle copyright/license notices retained. Binary is a build tool, never a plugin runtime input.",
+      "sha256_lf": "2209f919a22528af59a2af2ad97e8d056cca18e39f7d87aa3fd549a73b180150"
+    },
+    "licenses/Apache-2.0.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "licenses/asm-7.3.1-BSD-3-Clause.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "3d590b383ac641d856851775ed49145923207961efa6a8230393505f747a53c7"
+    },
+    "licenses/dependency-origins.md": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "dda6a86ad23ff9ef0f21cbb5038b05976a004fa67741aa7b417e24bf76a3f4c8"
+    },
+    "licenses/keystone-GPL-3.0.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "licenses/keystone-source.md": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "c68920dd46ead7cfd0e9d71211b83cf300ea9d121df527ded3aee0889881b0ae"
+    },
+    "licenses/nashorn-GPL-2.0-with-classpath.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "4b9abebc4338048a7c2dc184e9f800deb349366bdf28eb23c2677a77b4c87726"
+    },
+    "licenses/nashorn-additional-license-info.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "69369283a3e40c098832bf4fd4fe38c7b780679a2a58d8f32fa892f639ed8424"
+    },
+    "licenses/nashorn-assembly-exception.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "a44eb7b5caf5534c6ef536b21edb40b4d6babf91bf97d9d45596868618b2c6fb"
+    },
+    "licenses/nashorn-double-conversion.md": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "7fcefc04d3f440e76f7cf1867c6bc01a9a3a01491c56b49db30f65156880bd43"
+    },
+    "licenses/nashorn-joni.md": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "42af97be383c0d60d0104b6385fad7525280eeae3b63a6be34f494f9a5e9b21b"
+    },
+    "licenses/sparrow-ExtendedConstructor-NOTICE.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "0cbc8139a8d893099b7a764917dca3788969e12190bc6b493d3426b04f091211"
+    },
+    "licenses/sparrow-GPL-3.0.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad"
+    },
+    "paper26/build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "b51998a592aee6db93ff4d1bf00489f932322ef9b7f302d1efd5dd0e64bed79a"
+    },
+    "paper26/src/main/resources/META-INF/licenses/itembridge-MIT.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "cd159aaa2941fb56816ca0fd030e153d49cc7157a17b1936ba3f079852c56401"
+    },
+    "paper26/src/main/resources/compat-sx/legacy-materials-26.2.tsv": {
+      "classification": "observed-platform-format-data",
+      "reason": "All 463 legacy identifiers and 256 data values observed through pinned Paper 26.2 build 123 public conversion API; independently compared exhaustively. See provenance/legacy-materials.md.",
+      "sha256_lf": "454ba4ca61840404a88d5d33b76f87bf99020cf75192b90622594b3c9fe40ba4"
+    },
+    "paper26/src/main/resources/plugin.yml": {
+      "classification": "reviewed-runtime-resource",
+      "reason": "Current plugin descriptor or attributed legal resource; required runtime identity/license contract, no upstream action helper or server-owned assets.",
+      "sha256_lf": "b6064680b6f0f745a1353090c4b612c39b825cdb5153baa68c9cf4c16f7a1df3"
+    },
+    "provenance/runtime-dependencies.json": {
+      "classification": "reviewed-dependency-record",
+      "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
+      "sha256_lf": "0d91658e25a97480f6b9ae49c9f83ad886676a61d533481f2e173cb5f13cb16a"
+    },
+    "settings.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "575a330c56d6984e1b71d810b5ec72b04443cba0b477a9c54920906f3385f8db"
+    },
+    "tools/PackagedScriptCheck.java": {
+      "classification": "reviewed-release-tool",
+      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
+      "sha256_lf": "a572739d5b5dbff2e1ea37000765b64800f3295a36a70dff5233ce74245126ca"
+    },
+    "tools/inventory.py": {
+      "classification": "reviewed-release-tool",
+      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
+      "sha256_lf": "abf9cf8f60aacd055f74b31861648b5bb6ef9df4b5ab1b6b1aa3f6204cb3165c"
+    },
+    "tools/prepare_release.py": {
+      "classification": "reviewed-release-tool",
+      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
+      "sha256_lf": "618a59f85fbdc43b376fbc0d638c424049292b3513e228f22baa5b7ab3915038"
+    },
+    "tools/verify_artifact.py": {
+      "classification": "reviewed-release-tool",
+      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
+      "sha256_lf": "4f57f65663d6a9fe1bc41391b7be9b5a0ea32db8f0d6c88d4a58c152ba79744a"
+    },
+    "tools/verify_source_review.py": {
+      "classification": "reviewed-release-tool",
+      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
+      "sha256_lf": "ae1b6c51772a09e7c830703e55fab67a8373b4681ee41860868c10adf901e781"
+    },
+    "vendor/itembridge/LICENSE": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "4dc293c99d08e55ae30382096d043d106ceebe9b535ffde04d343043d54f1561"
+    },
+    "vendor/itembridge/README.md": {
+      "classification": "reviewed-dependency-record",
+      "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
+      "sha256_lf": "fe17a982fe4cbf91fcce532abba65ccaef8ba3e6738cc93b6acb4b078d09180b"
+    },
+    "vendor/keystone/LICENSE": {
+      "classification": "attributed-legal-text",
+      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
+      "sha256_lf": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "vendor/keystone/README.md": {
+      "classification": "reviewed-dependency-record",
+      "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
+      "sha256_lf": "52471b44251f026ea5305cccee5da3fda1ef19f878a813ecbb9af190533d7786"
+    },
+    "vendor/keystone/build.gradle.kts": {
+      "classification": "reviewed-build-input",
+      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
+      "sha256_lf": "83d4b63a1292cdb93db6ed5b396107ff320afff0f93e9d248170224d4f174d7f"
+    },
+    "vendor/keystone/upstream.json": {
+      "classification": "reviewed-dependency-record",
+      "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
+      "sha256_lf": "5df296839b23ffb20924dad62fe68e4be832fd7b8d7bf5cb3b649b51ea2ebcb6"
     }
   }
 }

@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "runtime_artifacts": [
+    {
+      "coordinate": "org.openjdk.nashorn:nashorn-core:15.4",
+      "sha256": "6f816e84dfd63a81d4eaa7829c08337bbaff3ec683ff3bf6bbd90d017a00dc6f",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/openjdk/nashorn/nashorn-core/15.4/nashorn-core-15.4.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/openjdk/nashorn/nashorn-core/15.4/nashorn-core-15.4-sources.jar"
+    },
+    {
+      "coordinate": "org.ow2.asm:asm:7.3.1",
+      "sha256": "2f67e11ceec819ebd88ddee5300aba699b1cbab2e20c22e97cf027d3be93959b",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/7.3.1/asm-7.3.1.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/7.3.1/asm-7.3.1-sources.jar"
+    },
+    {
+      "coordinate": "org.ow2.asm:asm-commons:7.3.1",
+      "sha256": "87cd8bb3c6bf6bcbb33fca48060c5065f66ebf6a3d7de9bf18bff51bcf156ebc",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-commons/7.3.1/asm-commons-7.3.1.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-commons/7.3.1/asm-commons-7.3.1-sources.jar"
+    },
+    {
+      "coordinate": "org.ow2.asm:asm-tree:7.3.1",
+      "sha256": "f91a4a8aa868c5c4665bb4fd134019a91f9f8b9216527fba295e3c8b5422b78b",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-tree/7.3.1/asm-tree-7.3.1.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-tree/7.3.1/asm-tree-7.3.1-sources.jar"
+    },
+    {
+      "coordinate": "org.ow2.asm:asm-analysis:7.3.1",
+      "sha256": "46b8a8efd4b94facb5ab4b35afe30ee0546ae7a43d2c64e6def56c2f168fefa5",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-analysis/7.3.1/asm-analysis-7.3.1.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-analysis/7.3.1/asm-analysis-7.3.1-sources.jar"
+    },
+    {
+      "coordinate": "org.ow2.asm:asm-util:7.3.1",
+      "sha256": "182128592742ed4883ac82bf205f137b6bfbe1234c68e6feb13759e75a85b729",
+      "binary_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-util/7.3.1/asm-util-7.3.1.jar",
+      "sources_url": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-util/7.3.1/asm-util-7.3.1-sources.jar"
+    },
+    {
+      "coordinate": "net.momirealms:sparrow-yaml:1.0.22",
+      "sha256": "8373d0821e7e49ca76e9dc7d24a4c93eeb8d0bc801cf386ece2a568431770c1c",
+      "binary_url": "https://repo.momirealms.net/releases/net/momirealms/sparrow-yaml/1.0.22/sparrow-yaml-1.0.22.jar",
+      "sources_url": "https://repo.momirealms.net/releases/net/momirealms/sparrow-yaml/1.0.22/sparrow-yaml-1.0.22-sources.jar"
+    }
+  ],
+  "itembridge_input": {
+    "coordinate": "cn.gtemc:itembridge:1.0.32",
+    "sha256": "07276894b33aa8ee7c3b9d2969295b40668aafcbaa75d3049de1bc659c99054e",
+    "source_commit": "bdf107863b64dc6d70888e4597a7413d3eea88fb",
+    "source_url": "https://github.com/jhqwqmc/ItemBridge/tree/bdf107863b64dc6d70888e4597a7413d3eea88fb",
+    "modifications": "NI/SX provider and discovery classes removed; attributed discovery customization compiled."
+  },
+  "embedded_snakeyaml": {
+    "version": "3.1-SNAPSHOT-forked",
+    "contained_in": "net.momirealms:sparrow-yaml:1.0.22",
+    "sha256_before_upstream_shading": "cdfe1aa1a3f872a322f379e396cf649a8d756f2d39599607d1fda408487ac06d",
+    "binary_url": "https://github.com/Xiao-MoMi/sparrow-yaml/blob/e325884f1e92dc4a86b35cdbc90bf0183458a7a6/libs/snakeyaml-engine-3.1-SNAPSHOT-forked.jar",
+    "declared_license": "Apache-2.0",
+    "source_limit": "Exact modified source and separate fork NOTICE not located; stock sources are not asserted equivalent."
+  },
+  "packaged_notices": {
+    "META-INF/licenses/Apache-2.0.txt": {
+      "source": "licenses/Apache-2.0.txt",
+      "sha256_lf": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "META-INF/licenses/asm-7.3.1-BSD-3-Clause.txt": {
+      "source": "licenses/asm-7.3.1-BSD-3-Clause.txt",
+      "sha256_lf": "3d590b383ac641d856851775ed49145923207961efa6a8230393505f747a53c7"
+    },
+    "META-INF/licenses/dependency-origins.md": {
+      "source": "licenses/dependency-origins.md",
+      "sha256_lf": "dda6a86ad23ff9ef0f21cbb5038b05976a004fa67741aa7b417e24bf76a3f4c8"
+    },
+    "META-INF/licenses/keystone-GPL-3.0.txt": {
+      "source": "licenses/keystone-GPL-3.0.txt",
+      "sha256_lf": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "META-INF/licenses/keystone-source.md": {
+      "source": "licenses/keystone-source.md",
+      "sha256_lf": "c68920dd46ead7cfd0e9d71211b83cf300ea9d121df527ded3aee0889881b0ae"
+    },
+    "META-INF/licenses/nashorn-additional-license-info.txt": {
+      "source": "licenses/nashorn-additional-license-info.txt",
+      "sha256_lf": "69369283a3e40c098832bf4fd4fe38c7b780679a2a58d8f32fa892f639ed8424"
+    },
+    "META-INF/licenses/nashorn-assembly-exception.txt": {
+      "source": "licenses/nashorn-assembly-exception.txt",
+      "sha256_lf": "a44eb7b5caf5534c6ef536b21edb40b4d6babf91bf97d9d45596868618b2c6fb"
+    },
+    "META-INF/licenses/nashorn-double-conversion.md": {
+      "source": "licenses/nashorn-double-conversion.md",
+      "sha256_lf": "7fcefc04d3f440e76f7cf1867c6bc01a9a3a01491c56b49db30f65156880bd43"
+    },
+    "META-INF/licenses/nashorn-GPL-2.0-with-classpath.txt": {
+      "source": "licenses/nashorn-GPL-2.0-with-classpath.txt",
+      "sha256_lf": "4b9abebc4338048a7c2dc184e9f800deb349366bdf28eb23c2677a77b4c87726"
+    },
+    "META-INF/licenses/nashorn-joni.md": {
+      "source": "licenses/nashorn-joni.md",
+      "sha256_lf": "42af97be383c0d60d0104b6385fad7525280eeae3b63a6be34f494f9a5e9b21b"
+    },
+    "META-INF/licenses/sparrow-ExtendedConstructor-NOTICE.txt": {
+      "source": "licenses/sparrow-ExtendedConstructor-NOTICE.txt",
+      "sha256_lf": "0cbc8139a8d893099b7a764917dca3788969e12190bc6b493d3426b04f091211"
+    },
+    "META-INF/licenses/sparrow-GPL-3.0.txt": {
+      "source": "licenses/sparrow-GPL-3.0.txt",
+      "sha256_lf": "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad"
+    }
+  }
+}
