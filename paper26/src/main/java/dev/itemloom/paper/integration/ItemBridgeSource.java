@@ -92,9 +92,6 @@ final class ItemBridgeSource {
                                 plugin ->
                                         plugin.isEnabled()
                                                 && ExternalItemMaterial.allowed(plugin.getName()))
-                        .removeById("neigeitems")
-                        .removeById("sxitem")
-                        .removeById("itemloom")
                         .immutable(true)
                         .build();
         return new Registry(bridge, Map.copyOf(owners), Map.copyOf(failures));

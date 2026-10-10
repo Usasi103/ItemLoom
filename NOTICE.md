@@ -25,15 +25,25 @@ behavioral contracts, together with SX branch/time parsing. This records the rep
 status or an erasure of the project's development history. Required configuration vocabulary,
 legacy script aliases, and data-format names remain in the compatibility boundary.
 
+Version 2.2.0 extends the review to every existing production Java file. Additional
+contract-based replacements cover NI collection nodes, percent text and escaped
+paths, literal editors, inventory requirements, display templates and proofs,
+durability/drop/trigger decisions, and the SX math/script boundaries. Retained
+adapters and simple format policies have file-level review reasons in
+[the source inventory](provenance/README.md). The review and replacements do not
+certify historical originality or remove the licensing and attribution above.
+
 ## Included source and runtime libraries
 
 - **ItemBridge 1.0.32**, copyright 2025 **jhqwqmc**: [ItemBridge](https://github.com/jhqwqmc/ItemBridge),
   MIT License, source revision `bdf107863b64dc6d70888e4597a7413d3eea88fb`.
-  The public Maven artifact `cn.gtemc:itembridge:1.0.32` is embedded and relocated into
+  The public Maven artifact `cn.gtemc:itembridge:1.0.32` is filtered, embedded and relocated into
   `dev.itemloom.internal.itembridge`; its license is packaged at `META-INF/licenses/itembridge-MIT.txt`.
-  The unmodified library includes small NI/SX adapter classes. ItemLoom excludes their registration
-  and rejects these provider IDs; it does not delegate generation to NI/SX or embed their plugin
-  implementations. Keeping the standard discovery API avoids relying on ItemBridge's private factories.
+  ItemLoom removes the NI/SX provider bytecode and replaces provider discovery with the explicitly
+  attributed customization in `vendor/itembridge`. The remaining provider implementations and
+  core come from ItemBridge. Its input hash, source revision and modifications are documented in
+  that directory and packaged at `META-INF/licenses/itembridge-modifications.md`. No NI/SX
+  provider classes or direct NI/SX JVM type references are allowed in the resulting JAR.
 
 - **Keystone 0.3.6**: the source subset used by ItemLoom is included under `vendor/keystone`, derived from
   source revision `3554cf5502ff4b52532511c396d5ef5c9bd29791`. Its source and license are supplied with this repository.

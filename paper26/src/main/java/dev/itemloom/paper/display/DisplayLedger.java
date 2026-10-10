@@ -1,184 +1,277 @@
 package dev.itemloom.paper.display;
 
-import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
-import net.minecraft.core.component.DataComponentPatch;
+import net.minecraft.core.component.DataComponentGetter;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.HashedPatchMap;
 import net.minecraft.network.HashedStack;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 
-/** Connection-local proofs of copies successfully sent to this client; no script runs under its lock. */
+/** Connection-local evidence. Preparing work and authorizing a successful write are separate steps. */
 public final class DisplayLedger {
     public static final String MARKER = "itemloom:display";
-    private static final int ORIGINALS = 512, VARIANTS = 4;
+    private static final int MAX_IDENTITIES = 512;
+    private static final int MAX_APPEARANCES = 4;
+    private static final int MAX_PREPARATIONS = 2048;
+    static final int MAX_NESTING = 63;
+    static final int MAX_NESTED_ITEMS = 2048;
 
-    private record Key(Item item, DataComponentPatch patch) {
-        static Key of(ItemStack stack) {
-            return new Key(stack.getItem(), stack.getComponentsPatch());
+    /** Snapshots on both boundaries: packet consumers cannot mutate the evidence carried to commit. */
+    public record Sent(ItemStack original, ItemStack display, String token) {
+        public Sent {
+            original = ProofItemCopies.copy(Objects.requireNonNull(original));
+            display = ProofItemCopies.copy(Objects.requireNonNull(display));
+        }
+
+        @Override
+        public ItemStack original() {
+            return ProofItemCopies.copy(original);
+        }
+
+        @Override
+        public ItemStack display() {
+            return ProofItemCopies.copy(display);
         }
     }
 
-    public record Sent(ItemStack original, ItemStack display, String token) {}
+    /** The stack is privately owned whenever this key is retained in a map. Count is not identity. */
+    private record Identity(ItemStack stack) {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Identity identity
+                    && ItemStack.isSameItemSameComponents(stack, identity.stack);
+        }
 
-    private record Entry(Sent sent, ItemStack unmarked) {}
-
-    private record PreparedKey(Key original, Key display) {}
-
-    private final LinkedHashMap<Key, List<Entry>> entries = new LinkedHashMap<>();
-    private final Map<String, Sent> tokens = new java.util.HashMap<>();
-    // Reservations share tokens across packets rendered before write completion. They confer no
-    // authority.
-    private final LinkedHashMap<PreparedKey, Sent> prepared = new LinkedHashMap<>();
-
-    public static Sent canonical(ItemStack original) {
-        return new Sent(original.copyWithCount(1), original.copyWithCount(1), "");
+        @Override
+        public int hashCode() {
+            return ItemStack.hashItemAndComponents(stack);
+        }
     }
 
-    /** Preparation does not authorize a return. commit is called only after a successful write. */
+    private record Pair(Identity original, Identity appearance) {}
+
+    private record Appearance(Pair pair, ItemStack marked, String token) {
+        boolean describes(Sent sent) {
+            return token.equals(sent.token)
+                    && ItemStack.isSameItemSameComponents(pair.original.stack, sent.original)
+                    && ItemStack.isSameItemSameComponents(marked, sent.display);
+        }
+    }
+
+    private static final class Authorization {
+        final LinkedHashMap<Identity, Appearance> appearances = new LinkedHashMap<>();
+    }
+
+    private final LinkedHashMap<Identity, Authorization> authorized = new LinkedHashMap<>();
+    private final Map<String, Appearance> sentTokens = new HashMap<>();
+    private final LinkedHashMap<Pair, Appearance> preparing = new LinkedHashMap<>();
+    private final Map<String, Appearance> preparedTokens = new HashMap<>();
+
+    public DisplayLedger() {}
+
+    public static Sent canonical(ItemStack stack) {
+        return new Sent(stack, stack, null);
+    }
+
+    /** The rendering service enforces outbound count equality; identities deliberately ignore count. */
     public synchronized Sent prepare(ItemStack original, ItemStack display) {
-        for (Entry entry : snapshot(original)) {
-            Sent previous = entry.sent();
-            if (previous.token().isEmpty()) continue;
-            if (ItemStack.isSameItemSameComponents(entry.unmarked(), display))
-                return new Sent(
-                        original.copyWithCount(1),
-                        previous.display().copyWithCount(display.getCount()),
-                        previous.token());
+        Objects.requireNonNull(original);
+        Objects.requireNonNull(display);
+        if (original.isEmpty()
+                || display.isEmpty()
+                || original.getItem() != display.getItem()
+                || marked(original)
+                || marked(display)
+                || hasNestedMarker(original)
+                || hasNestedMarker(display))
+            throw new IllegalArgumentException(
+                    "Display proof requires unmarked items of the same type");
+
+        Pair lookup = new Pair(new Identity(original), new Identity(display));
+        Appearance appearance = preparing.get(lookup);
+        if (appearance == null) {
+            Authorization existing = authorized.get(lookup.original);
+            if (existing != null) appearance = existing.appearances.get(lookup.appearance);
         }
-        var key = new PreparedKey(Key.of(original), Key.of(display));
-        Sent pending = prepared.remove(key);
-        if (pending != null) {
-            prepared.put(key, pending);
-            return new Sent(
-                    pending.original().copy(),
-                    pending.display().copyWithCount(display.getCount()),
-                    pending.token());
+        if (appearance == null) {
+            Pair owned =
+                    new Pair(
+                            new Identity(ProofItemCopies.copy(original).copyWithCount(1)),
+                            new Identity(ProofItemCopies.copy(display).copyWithCount(1)));
+            String token = UUID.randomUUID().toString();
+            ItemStack marked = ProofItemCopies.copy(owned.appearance.stack);
+            CustomData.update(
+                    DataComponents.CUSTOM_DATA, marked, tag -> tag.putString(MARKER, token));
+            appearance = new Appearance(owned, marked, token);
+            preparing.put(owned, appearance);
+            preparedTokens.put(token, appearance);
+            while (preparing.size() > MAX_PREPARATIONS) {
+                Appearance expired = preparing.pollFirstEntry().getValue();
+                preparedTokens.remove(expired.token);
+            }
         }
-        String token = UUID.randomUUID().toString();
-        var clean = display.copyWithCount(1);
-        CustomData.update(DataComponents.CUSTOM_DATA, clean, tag -> tag.putString(MARKER, token));
-        var frozen = new Sent(original.copyWithCount(1), clean, token);
-        prepared.put(key, frozen);
-        while (prepared.size() > ORIGINALS * VARIANTS) prepared.pollFirstEntry();
-        return new Sent(frozen.original().copy(), clean.copyWithCount(display.getCount()), token);
+        return new Sent(
+                original, appearance.marked.copyWithCount(display.getCount()), appearance.token);
     }
 
+    /** Called only by the successful-write callback. Unknown, expired and foreign work is ignored. */
     public synchronized void commit(Sent sent) {
-        Key key = Key.of(sent.original());
-        var values = new ArrayList<>(entries.getOrDefault(key, List.of()));
-        values.removeIf(value -> value.sent().token().equals(sent.token()));
-        Sent frozen =
-                new Sent(
-                        sent.original().copyWithCount(1),
-                        sent.display().copyWithCount(1),
-                        sent.token());
-        ItemStack unmarked = null;
-        if (!sent.token().isEmpty()) {
-            // Derive once from the detached committed proof, so edits to a returned Sent cannot
-            // poison comparison state.
-            unmarked = frozen.display().copy();
-            CustomData.update(DataComponents.CUSTOM_DATA, unmarked, tag -> tag.remove(MARKER));
-            var preparedKey = new PreparedKey(key, Key.of(unmarked));
-            Sent pending = prepared.get(preparedKey);
-            if (pending != null && pending.token().equals(sent.token()))
-                prepared.remove(preparedKey);
+        Objects.requireNonNull(sent);
+        if (sent.token == null) {
+            if (!sent.original.isEmpty()
+                    && !marked(sent.original)
+                    && !hasNestedMarker(sent.original)
+                    && ItemStack.isSameItemSameComponents(sent.original, sent.display))
+                remember(new Identity(ProofItemCopies.copy(sent.original).copyWithCount(1)));
+            return;
         }
-        values.add(new Entry(frozen, unmarked));
-        if (!frozen.token().isEmpty()) tokens.put(frozen.token(), frozen);
-        while (values.size() > VARIANTS) tokens.remove(values.removeFirst().sent().token());
-        entries.remove(key);
-        entries.put(key, List.copyOf(values));
-        while (entries.size() > ORIGINALS)
-            entries.pollFirstEntry()
-                    .getValue()
-                    .forEach(value -> tokens.remove(value.sent().token()));
+
+        Appearance appearance = preparedTokens.get(sent.token);
+        if (appearance == null) appearance = sentTokens.get(sent.token);
+        if (appearance == null || !appearance.describes(sent)) return;
+        preparing.remove(appearance.pair);
+        preparedTokens.remove(appearance.token);
+        Authorization group = remember(appearance.pair.original);
+        group.appearances.remove(appearance.pair.appearance);
+        group.appearances.put(appearance.pair.appearance, appearance);
+        sentTokens.put(appearance.token, appearance);
+        while (group.appearances.size() > MAX_APPEARANCES) {
+            Appearance expired = group.appearances.pollFirstEntry().getValue();
+            sentTokens.remove(expired.token);
+        }
     }
 
-    private synchronized List<Entry> snapshot(ItemStack original) {
-        return entries.getOrDefault(Key.of(original), List.of());
+    private Authorization remember(Identity identity) {
+        Authorization group = authorized.remove(identity);
+        if (group == null) group = new Authorization();
+        authorized.put(identity, group);
+        while (authorized.size() > MAX_IDENTITIES) {
+            Authorization expired = authorized.pollFirstEntry().getValue();
+            expired.appearances.values().forEach(value -> sentTokens.remove(value.token));
+        }
+        return group;
     }
 
     public synchronized void clear() {
-        entries.clear();
-        tokens.clear();
-        prepared.clear();
+        authorized.clear();
+        sentTokens.clear();
+        preparing.clear();
+        preparedTokens.clear();
     }
 
     public synchronized int size() {
-        return entries.size();
+        return authorized.size();
     }
 
     public static boolean marked(ItemStack stack) {
-        return stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).contains(MARKER);
+        return hasMarker(stack);
     }
 
-    /** Nested items are not display-transformed. A client must not smuggle a display copy inside a container. */
+    private static boolean hasMarker(DataComponentGetter item) {
+        CustomData data = item.get(DataComponents.CUSTOM_DATA);
+        return data != null && data.contains(MARKER);
+    }
+
+    private record Child(DataComponentGetter item, int depth) {}
+
+    /** Iterative traversal bounds both memory and work, including cyclic/malformed component graphs. */
     public static boolean hasNestedMarker(ItemStack stack) {
-        return nested(stack, 0, new int[] {2048});
-    }
-
-    private static boolean nested(
-            net.minecraft.core.component.DataComponentGetter item, int depth, int[] budget) {
-        if (depth >= 64 || --budget[0] < 0) return true;
-        var container = item.get(DataComponents.CONTAINER);
-        if (container != null)
-            for (var child : container.nonEmptyItems())
-                if (markedChild(child, depth, budget)) return true;
-        var bundle = item.get(DataComponents.BUNDLE_CONTENTS);
-        if (bundle != null)
-            for (var child : bundle.items()) if (markedChild(child, depth, budget)) return true;
-        var projectiles = item.get(DataComponents.CHARGED_PROJECTILES);
-        if (projectiles != null)
-            for (var child : projectiles.items())
-                if (markedChild(child, depth, budget)) return true;
-        var remainder = item.get(DataComponents.USE_REMAINDER);
-        return remainder != null && markedChild(remainder.convertInto(), depth, budget);
-    }
-
-    private static boolean markedChild(
-            net.minecraft.world.item.ItemStackTemplate child, int depth, int[] budget) {
-        var data = child.get(DataComponents.CUSTOM_DATA);
-        return data != null && data.contains(MARKER) || nested(child, depth + 1, budget);
-    }
-
-    /** null rejects a forged/expired display copy. Count is subsequently validated by vanilla. */
-    public ItemStack restore(ItemStack incoming) {
-        String token =
-                incoming.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
-                        .getUnsafe()
-                        .getString(MARKER)
-                        .orElse(null);
-        Sent sent;
-        synchronized (this) {
-            sent = tokens.get(token);
+        ArrayDeque<Child> work = new ArrayDeque<>();
+        work.add(new Child(stack, 0));
+        int visited = 0;
+        try {
+            while (!work.isEmpty()) {
+                Child child = work.removeLast();
+                if (++visited > MAX_NESTED_ITEMS || child.depth > MAX_NESTING) return true;
+                if (child.depth != 0 && hasMarker(child.item)) return true;
+                int depth = child.depth + 1;
+                var container = child.item.get(DataComponents.CONTAINER);
+                if (container != null)
+                    for (var item : container.nonEmptyItems()) {
+                        if (work.size() + visited >= MAX_NESTED_ITEMS) return true;
+                        work.add(new Child(item, depth));
+                    }
+                var bundle = child.item.get(DataComponents.BUNDLE_CONTENTS);
+                if (bundle != null)
+                    for (var item : bundle.items()) {
+                        if (work.size() + visited >= MAX_NESTED_ITEMS) return true;
+                        work.add(new Child(item, depth));
+                    }
+                var projectiles = child.item.get(DataComponents.CHARGED_PROJECTILES);
+                if (projectiles != null)
+                    for (var item : projectiles.items()) {
+                        if (work.size() + visited >= MAX_NESTED_ITEMS) return true;
+                        work.add(new Child(item, depth));
+                    }
+                var remainder = child.item.get(DataComponents.USE_REMAINDER);
+                if (remainder != null) {
+                    if (work.size() + visited >= MAX_NESTED_ITEMS) return true;
+                    work.add(new Child(remainder.convertInto(), depth));
+                }
+                var sulfur = child.item.get(DataComponents.SULFUR_CUBE_CONTENT);
+                if (sulfur != null) {
+                    if (work.size() + visited >= MAX_NESTED_ITEMS) return true;
+                    work.add(new Child(sulfur.absorbedBlockItemStack(), depth));
+                }
+            }
+            return false;
+        } catch (RuntimeException malformed) {
+            return true;
         }
-        if (sent == null || !ItemStack.isSameItemSameComponents(incoming, sent.display()))
-            return null;
-        return sent.original().copyWithCount(incoming.getCount());
     }
 
-    public boolean knownOriginal(ItemStack incoming) {
-        return !snapshot(incoming).isEmpty();
+    public synchronized ItemStack restore(ItemStack received) {
+        if (received.isEmpty() || hasNestedMarker(received)) return null;
+        CustomData data = received.get(DataComponents.CUSTOM_DATA);
+        if (data == null) return null;
+        String token = data.getUnsafe().getString(MARKER).orElse(null);
+        Appearance appearance = sentTokens.get(token);
+        if (appearance == null || !ItemStack.isSameItemSameComponents(received, appearance.marked))
+            return null;
+        return ProofItemCopies.copy(appearance.pair.original.stack)
+                .copyWithCount(received.getCount());
+    }
+
+    public synchronized boolean knownOriginal(ItemStack stack) {
+        return !stack.isEmpty()
+                && !marked(stack)
+                && !hasNestedMarker(stack)
+                && authorized.containsKey(new Identity(stack));
     }
 
     public HashedStack acceptSent(HashedStack received) {
-        return new HashedStack() {
-            @Override
-            public boolean matches(ItemStack actual, HashedPatchMap.HashGenerator hashes) {
-                if (received.matches(actual, hashes)) return true;
-                if (actual.isEmpty()) return false;
-                for (Entry entry : snapshot(actual))
-                    if (received.matches(
-                            entry.sent().display().copyWithCount(actual.getCount()), hashes))
-                        return true;
-                return false;
-            }
-        };
+        Objects.requireNonNull(received);
+        // ActualItem is the incoming wire representation; its record contains mutable collections.
+        HashedStack claim = received;
+        if (received instanceof HashedStack.ActualItem item)
+            claim =
+                    new HashedStack.ActualItem(
+                            item.item(),
+                            item.count(),
+                            new HashedPatchMap(
+                                    Map.copyOf(item.components().addedComponents()),
+                                    Set.copyOf(item.components().removedComponents())));
+        HashedStack detached = claim;
+        return (actual, hashes) ->
+                detached.matches(actual, hashes) || matchesAppearance(detached, actual, hashes);
+    }
+
+    private synchronized boolean matchesAppearance(
+            HashedStack received, ItemStack actual, HashedPatchMap.HashGenerator hashes) {
+        if (actual.isEmpty() || marked(actual) || hasNestedMarker(actual)) return false;
+        Authorization group = authorized.get(new Identity(actual));
+        if (group == null) return false;
+        for (Appearance appearance : group.appearances.values())
+            if (received.matches(
+                    ProofItemCopies.copy(appearance.marked).copyWithCount(actual.getCount()),
+                    hashes)) return true;
+        return false;
     }
 }

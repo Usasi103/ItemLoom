@@ -359,22 +359,16 @@ final class ItemDisplayProbe {
             var local = new DisplayLedger();
             var initial = local.prepare(original, plain);
             local.commit(initial);
-            var expected = initial.display().copy();
-            net.minecraft.world.item.component.CustomData.update(
-                    DataComponents.CUSTOM_DATA, expected, tag -> tag.remove(DisplayLedger.MARKER));
-            boolean shouldReuse = ItemStack.isSameItemSameComponents(expected, plain);
             c.that(
                     local.prepare(original, plain).token().equals(initial.token()),
-                    "matching reservation preserves the legacy token even when marker removal drops empty custom_data: "
+                    "successfully sent appearance retains a stable token for exact custom_data shape: "
                             + emptyData);
-            // The original implementation can retain a reservation when removing the marker
-            // also removes an empty component. Evict pending reservations before testing only
-            // the committed comparison; an unsent preparation never authorizes a return.
+            // Pending work cannot displace a successfully sent equivalent appearance.
             for (int i = 0; i < 2048; i++)
                 local.prepare(named("empty-component-pending-" + i), named("pending"));
             c.that(
-                    local.prepare(original, plain).token().equals(initial.token()) == shouldReuse,
-                    "cached comparison preserves removal of an empty custom_data component: "
+                    local.prepare(original, plain).token().equals(initial.token()),
+                    "committed appearance reuses its token after unrelated preparation eviction: "
                             + emptyData);
         }
     }
@@ -470,6 +464,26 @@ final class ItemDisplayProbe {
     }
 
     private static void queue(Checks c) {
+        try (Harness h = new Harness()) {
+            var original = named("queued");
+            var data = new CompoundTag();
+            data.putInt("queued", 1);
+            original.set(
+                    DataComponents.CUSTOM_DATA,
+                    net.minecraft.world.item.component.CustomData.of(data));
+            var expected = dev.itemloom.paper.display.ProofItemCopies.copy(original);
+            h.channel.write(slot(original));
+            h.channel.flush();
+            h.channel.runPendingTasks();
+            ((net.minecraft.network.chat.MutableComponent) original.get(DataComponents.CUSTOM_NAME))
+                    .append(" changed");
+            original.get(DataComponents.CUSTOM_DATA).getUnsafe().putInt("queued", 2);
+            h.tasks.removeFirst().run();
+            h.channel.runPendingTasks();
+            c.that(
+                    h.ledger.knownOriginal(expected) && !h.ledger.knownOriginal(original),
+                    "queued canonical snapshot isolates in-place text and NBT changes before rendering");
+        }
         try (Harness h = new Harness()) {
             ItemStack original = named("server");
             var promise = h.channel.newPromise();
@@ -757,6 +771,7 @@ final class ItemDisplayProbe {
                 CraftItemStack.unwrap(
                         f.catalog.generate("shown", null, Map.of("roll", "saved"), false));
         var generator = f.catalog.registry().generators().remove("shown");
+        original.set(DataComponents.ITEM_NAME, Component.literal("untouched"));
         ItemDisplayService service = new ItemDisplayService(plugin, current::get);
         service.start();
         var channel = new EmbeddedChannel();
@@ -801,6 +816,14 @@ final class ItemDisplayProbe {
                                     Bukkit.isPrimaryThread() && !event.isAsynchronous(),
                                     "network event dispatches on main thread");
                             events.incrementAndGet();
+                            var callbackItem = CraftItemStack.unwrap(event.getItem());
+                            ((net.minecraft.network.chat.MutableComponent)
+                                            callbackItem.get(DataComponents.ITEM_NAME))
+                                    .append(" callback");
+                            callbackItem
+                                    .get(DataComponents.CUSTOM_DATA)
+                                    .getUnsafe()
+                                    .putString("display_callback", "changed");
                         },
                         plugin);
         // EmbeddedChannel has no autonomous event loop. Pump scheduled writes while Bukkit
@@ -859,6 +882,17 @@ final class ItemDisplayProbe {
                                                         .equals("server")
                                                 && !DisplayLedger.marked(original),
                                         "integrated send leaves server item unmodified");
+                                c.that(
+                                        original.get(DataComponents.ITEM_NAME)
+                                                        .getString()
+                                                        .equals("untouched")
+                                                && !original.get(DataComponents.CUSTOM_DATA)
+                                                        .contains("display_callback")
+                                                && packet.getItem()
+                                                        .get(DataComponents.ITEM_NAME)
+                                                        .getString()
+                                                        .equals("untouched callback"),
+                                        "in-place event text and NBT edits affect only the display copy");
                                 var display = packet.getItem();
                                 try (Fixture replacement = new Fixture(plugin, "reloaded")) {
                                     current.set(replacement.catalog);

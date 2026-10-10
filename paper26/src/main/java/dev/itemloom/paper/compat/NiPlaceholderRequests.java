@@ -66,23 +66,12 @@ public final class NiPlaceholderRequests {
         }
         if (kind.equals("count")) {
             if (!(viewer instanceof Player player) || head.length < 2) return "false";
-            String[] args = head[1].split("[_\\\\]", -1);
-            Map<String, Integer> needed = new HashMap<>();
-            for (int i = 0; i + 1 < args.length; i += 2) {
-                try {
-                    int count = Integer.parseInt(args[i + 1]);
-                    if (count > 0) needed.put(args[i], count);
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            for (ItemStack item : player.getInventory().getContents()) {
-                String id = NiItemNodes.itemId(item);
-                Integer count = needed.get(id);
-                if (count == null) continue;
-                if (count > item.getAmount()) needed.put(id, count - item.getAmount());
-                else needed.remove(id);
-            }
-            return Boolean.toString(needed.isEmpty());
+            return Boolean.toString(
+                    InventoryRequirements.fulfilled(
+                            head[1],
+                            java.util.Arrays.asList(player.getInventory().getContents()),
+                            NiItemNodes::itemId,
+                            ItemStack::getAmount));
         }
         if ((!kind.equals("data") && !kind.equals("nbt"))
                 || !(viewer instanceof Player player)

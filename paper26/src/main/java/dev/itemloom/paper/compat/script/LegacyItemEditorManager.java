@@ -4,8 +4,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.BitSet;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -442,33 +440,6 @@ public final class LegacyItemEditorManager {
         component(item, DataComponents.DAMAGE, copy -> copy.setDurability(damage));
     }
 
-    private record Match(int start, int end, String key) {}
-
-    private static List<Match> matches(String line, List<String> keys) {
-        List<Match> matches = new ArrayList<>();
-        for (String key : keys) {
-            if (key.isEmpty()) continue;
-            for (int at = line.indexOf(key); at >= 0; at = line.indexOf(key, at + 1))
-                matches.add(new Match(at, at + key.length(), key));
-        }
-        // StringSearcher's ignoreOverlaps selects longest matches first, then earliest
-        // equal-length matches. Replacement text is never fed back into the matcher.
-        matches.sort(
-                Comparator.<Match>comparingInt(value -> value.end - value.start)
-                        .reversed()
-                        .thenComparingInt(Match::start));
-        BitSet occupied = new BitSet(line.length());
-        List<Match> selected = new ArrayList<>();
-        for (Match match : matches) {
-            int next = occupied.nextSetBit(match.start);
-            if (next >= 0 && next < match.end) continue;
-            selected.add(match);
-            occupied.set(match.start, match.end);
-        }
-        selected.sort(Comparator.comparingInt(Match::start));
-        return selected;
-    }
-
     private static boolean replaceLiteral(
             ItemStack item, String content, boolean lore, boolean all) {
         return meta(
@@ -476,35 +447,12 @@ public final class LegacyItemEditorManager {
                 lore ? DataComponents.LORE : DataComponents.CUSTOM_NAME,
                 meta -> {
                     if (lore ? !meta.hasLore() : !meta.hasDisplayName()) return;
-                    HashMap<String, String> values = stringMap(color(content));
-                    if (values.isEmpty()) return;
-                    List<String> keys = new ArrayList<>(values.keySet()), lines = new ArrayList<>();
-                    for (String line : lore ? meta.getLore() : List.of(meta.getDisplayName())) {
-                        StringBuilder result = new StringBuilder();
-                        int offset = 0;
-                        for (Match match : matches(line, keys)) {
-                            result.append(line, offset, match.start);
-                            String replacement = values.get(match.key);
-                            if (replacement != null) {
-                                if (lore && replacement.indexOf('\n') >= 0) {
-                                    String[] parts = replacement.split("\n", -1);
-                                    for (int i = 0; i < parts.length; i++) {
-                                        result.append(parts[i]);
-                                        if (i < parts.length - 1) {
-                                            lines.add(result.toString());
-                                            result.setLength(0);
-                                        }
-                                    }
-                                } else result.append(replacement);
-                            } else if (!all) result.append(match.key);
-                            if (!all) values.remove(match.key);
-                            offset = match.end;
-                        }
-                        result.append(line, offset, line.length());
-                        lines.add(result.toString());
-                    }
-                    if (lore) meta.setLore(lines);
-                    else meta.setDisplayName(lines.getFirst());
+                    Map<String, String> rules = stringMap(color(content));
+                    if (rules.isEmpty()) return;
+                    if (lore) meta.setLore(LegacyLiteralText.lore(meta.getLore(), rules, all));
+                    else
+                        meta.setDisplayName(
+                                LegacyLiteralText.name(meta.getDisplayName(), rules, all));
                 });
     }
 

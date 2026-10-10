@@ -19,7 +19,6 @@ import dev.itemloom.compat.ni.action.NiActionContext;
 import dev.itemloom.compat.ni.action.NiContextKeys;
 import dev.itemloom.compat.ni.script.LegacyActionManager;
 import dev.itemloom.compat.ni.script.LegacySectionUtils;
-import dev.itemloom.core.ActionFlow.Result;
 import dev.itemloom.core.ItemIdentity;
 import dev.itemloom.paper.compat.NiItemNodes;
 import dev.itemloom.paper.compat.script.LegacyActionTrigger;
@@ -44,7 +43,6 @@ public final class ItemTriggers implements AutoCloseable {
     private final PaperActions actions;
     private final PlayerActionState players;
     private final BiFunction<Object, Map<String, Object>, NiActionContext> contexts;
-    private final JavaPlugin plugin;
     private final Map<String, Map<String, LegacyActionTrigger>> items;
     private final Set<String> keys;
     private final boolean tickPrefix;
@@ -91,8 +89,7 @@ public final class ItemTriggers implements AutoCloseable {
         this.actions = Objects.requireNonNull(actions, "actions");
         this.players = Objects.requireNonNull(players, "players");
         this.contexts = Objects.requireNonNull(contexts, "contexts");
-        this.plugin = Objects.requireNonNull(plugin, "plugin");
-        returns = players.returns(plugin);
+        returns = players.returns(Objects.requireNonNull(plugin, "plugin"));
         cooldownMessage = input.settings().string("Messages.itemCooldown");
         brokenMessage = input.settings().string("Messages.brokenItem");
         Objects.requireNonNull(factory, "factory");
@@ -176,8 +173,14 @@ public final class ItemTriggers implements AutoCloseable {
     }
 
     public void interact(Player player, ItemStack item, PlayerInteractEvent event) {
+        interact(player, item, event, null);
+    }
+
+    /** Listener entry with a physical hand source; the public overload remains caller-owned. */
+    void interact(
+            Player player, ItemStack supplied, PlayerInteractEvent event, TriggerSource source) {
         requireThread();
-        if (!active() || item == null || item.isEmpty()) return;
+        if (!active() || supplied == null || supplied.isEmpty()) return;
         String direction =
                 switch (event.getAction()) {
                     case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> "left";
@@ -186,83 +189,19 @@ public final class ItemTriggers implements AutoCloseable {
                 };
         if (direction == null) return;
         String prefix = player.isSneaking() ? "shift_" : "";
-        String basicKey = prefix + direction, allKey = prefix + "all";
-        if (!hasKey(basicKey) && !hasKey(allKey)) return;
-        String id = NiItemNodes.itemId(item);
-        Map<String, LegacyActionTrigger> triggers = id == null ? null : items.get(id);
-        if (triggers == null) return;
-        LegacyActionTrigger basic = triggers.get(basicKey), all = triggers.get(allKey);
-        if (basic == null && all == null) return;
-        ItemIdentity identity = NiItemNodes.identity(item);
-        if (identity == null) return;
-        event.setCancelled(true);
-        if (cooldown(basic == null ? all : basic, player)) return;
-        if (basic != null && !allow(basic, player, item, identity)) return;
-        if (all != null && !allow(all, player, item, identity)) return;
-        if (!active()) return;
-        NiActionContext context = context(player, item, event);
-        if (context == null) return;
-        ConsumeInfo consume =
-                basic != null && basic.getConsume() != null
-                        ? basic.getConsume()
-                        : all == null ? null : all.getConsume();
-        if (!consume(consume, player, item, context, false, identity.id())) return;
-        if (basic != null) run(basic, context);
-        if (all != null) run(all, context);
-    }
-
-    /** Listener entry with a physical hand source; the public overload remains caller-owned. */
-    void interact(
-            Player player, ItemStack supplied, PlayerInteractEvent event, TriggerSource source) {
-        requireThread();
-        String direction =
-                switch (event.getAction()) {
-                    case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> "left";
-                    case RIGHT_CLICK_AIR, RIGHT_CLICK_BLOCK -> "right";
-                    default -> null;
-                };
-        if (direction == null || !active()) return;
-        String prefix = player.isSneaking() ? "shift_" : "";
-        String basicKey = prefix + direction, allKey = prefix + "all";
-        if (!hasKey(basicKey) && !hasKey(allKey)) return;
+        if (!hasKey(prefix + direction) && !hasKey(prefix + "all")) return;
         String id = NiItemNodes.itemId(supplied);
-        Map<String, LegacyActionTrigger> configured = id == null ? null : items.get(id);
-        if (configured == null) return;
-        LegacyActionTrigger basic = configured.get(basicKey), all = configured.get(allKey);
+        if (id == null) return;
+        LegacyActionTrigger basic = find(id, prefix + direction);
+        LegacyActionTrigger all = find(id, prefix + "all");
         if (basic == null && all == null) return;
+        List<LegacyActionTrigger> selected =
+                basic == null ? List.of(all) : all == null ? List.of(basic) : List.of(basic, all);
+        ConsumeInfo rule = basic == null ? null : basic.getConsume();
+        if (rule == null && all != null) rule = all.getConsume();
+        // A matching interaction owns vanilla cancellation even when a source is already locked.
         event.setCancelled(true);
-        SourceCommit commit = beginSource(source, supplied);
-        if (commit == null) return;
-        try {
-            ItemStack item = source.candidate();
-            ItemIdentity identity = NiItemNodes.identity(item);
-            if (identity == null
-                    || cooldown(basic == null ? all : basic, player)
-                    || !stable(commit)) return;
-            if (basic != null && (!allow(basic, player, item, identity) || !stable(commit))) return;
-            if (all != null && (!allow(all, player, item, identity) || !stable(commit))) return;
-            NiActionContext context = context(player, item, event);
-            if (context == null) return;
-            ConsumeInfo consume =
-                    basic != null && basic.getConsume() != null
-                            ? basic.getConsume()
-                            : all == null ? null : all.getConsume();
-            if (!consume(
-                    consume,
-                    player,
-                    item,
-                    context,
-                    remainder -> stageReturn(commit, remainder),
-                    id,
-                    () -> stable(commit))) return;
-            ItemStack actual = commitSource(commit, item);
-            if (!commit.committed || !active() || commit.interrupted) return;
-            bindActual(context, actual);
-            if (basic != null) run(basic, context);
-            if (all != null && !commit.interrupted) run(all, context);
-        } finally {
-            endSource(commit);
-        }
+        dispatch(selected, rule, player, supplied, event, true, true, false, source);
     }
 
     /**
@@ -303,6 +242,11 @@ public final class ItemTriggers implements AutoCloseable {
             // A preceding listener can change the event's copy independently of the source.
             if (!commit.unchanged() || !sameStack(commit.snapshot, candidate)) return;
             if (cooldown(trigger, player)
+                    || !active()
+                    || !commit.unchanged()
+                    || commit.interrupted
+                    || session == 0
+                    || players.session(player.getUniqueId()) != session
                     || !allow(trigger, player, candidate, identity)
                     || !active()) return;
             NiActionContext context = context(player, candidate, event);
@@ -323,7 +267,12 @@ public final class ItemTriggers implements AutoCloseable {
                                         "eat slot " + slot,
                                         commit.snapshot);
                     },
-                    identity.id())) return;
+                    identity.id(),
+                    () ->
+                            !commit.interrupted
+                                    && commit.unchanged()
+                                    && session != 0
+                                    && players.session(player.getUniqueId()) == session)) return;
             if (!active()
                     || commit.interrupted
                     || !commit.unchanged()
@@ -408,41 +357,18 @@ public final class ItemTriggers implements AutoCloseable {
             boolean consume,
             boolean delayReturn) {
         requireThread();
-        if (!active()) return;
-        if (delayReturn) {
-            returns.begin(returnOwner);
-            delayedEventDepth++;
-        }
-        try {
-            if (!active() || !hasKey(type) || item == null || item.isEmpty()) return;
-            String id = NiItemNodes.itemId(item);
-            LegacyActionTrigger trigger = id == null ? null : find(id, type);
-            if (trigger == null) return;
-            ItemIdentity identity = NiItemNodes.identity(item);
-            if (identity == null) return;
-            if (cooldown(trigger, player)) {
-                if (cancel || cancelOnCooldown) cancel(event);
-                return;
-            }
-            if (!allow(trigger, player, item, identity) || !active()) return;
-            if (cancel) cancel(event);
-            NiActionContext context = context(player, item, event);
-            if (context == null) return;
-            if (consume
-                    && !consume(
-                            trigger.getConsume(),
-                            player,
-                            item,
-                            context,
-                            delayReturn,
-                            identity.id())) return;
-            run(trigger, context);
-        } finally {
-            if (delayReturn) {
-                delayedEventDepth--;
-                returns.end(returnOwner);
-            }
-        }
+        LegacyActionTrigger trigger = lookup(type, item);
+        if (trigger == null) return;
+        dispatch(
+                List.of(trigger),
+                consume ? trigger.getConsume() : null,
+                player,
+                item,
+                event,
+                cancel,
+                cancelOnCooldown,
+                delayReturn,
+                null);
     }
 
     /** Physical event entry. Candidate edits commit once, before any trigger body can move items. */
@@ -456,52 +382,118 @@ public final class ItemTriggers implements AutoCloseable {
             boolean consume,
             TriggerSource source) {
         requireThread();
-        if (!active() || !hasKey(type) || supplied == null || supplied.isEmpty()) return;
-        String id = NiItemNodes.itemId(supplied);
-        LegacyActionTrigger trigger = id == null ? null : find(id, type);
+        LegacyActionTrigger trigger = lookup(type, supplied);
         if (trigger == null) return;
-        SourceCommit commit = beginSource(source, supplied);
-        if (commit == null) {
+        dispatch(
+                List.of(trigger),
+                consume ? trigger.getConsume() : null,
+                player,
+                supplied,
+                event,
+                cancel,
+                cancelOnCooldown,
+                false,
+                source);
+    }
+
+    private LegacyActionTrigger lookup(String type, ItemStack item) {
+        if (!active() || type == null || !hasKey(type) || item == null || item.isEmpty())
+            return null;
+        String id = NiItemNodes.itemId(item);
+        return id == null ? null : find(id, type);
+    }
+
+    /** All gates finish before any deduction, and all physical writes finish before body execution. */
+    private void dispatch(
+            List<LegacyActionTrigger> selected,
+            ConsumeInfo rule,
+            Player player,
+            ItemStack supplied,
+            Event event,
+            boolean cancel,
+            boolean cancelOnCooldown,
+            boolean delayReturn,
+            TriggerSource source) {
+        ItemIdentity identity = NiItemNodes.identity(supplied);
+        if (identity == null) return;
+        SourceCommit commit = source == null ? null : beginSource(source, supplied);
+        if (source != null && commit == null) {
             if (cancel) cancel(event);
             return;
         }
+        long session = players.session(player.getUniqueId());
+        BooleanSupplier live =
+                () ->
+                        active()
+                                && player.isOnline()
+                                && session != 0
+                                && players.session(player.getUniqueId()) == session
+                                && (commit == null || stable(commit));
+        boolean delayedCaller = source == null && delayReturn;
+        if (delayedCaller) {
+            returns.begin(returnOwner);
+            delayedEventDepth++;
+        }
+        boolean consumed = false;
         ItemStack actual = null;
         try {
-            ItemStack item = source.candidate();
-            ItemIdentity identity = NiItemNodes.identity(item);
-            if (identity == null) return;
-            if (cooldown(trigger, player)) {
+            ItemStack candidate = source == null ? supplied : source.candidate();
+            if (!live.getAsBoolean()) return;
+            if (cooldown(selected.getFirst(), player)) {
                 if (cancel || cancelOnCooldown) cancel(event);
                 return;
             }
-            if (!stable(commit) || !allow(trigger, player, item, identity) || !stable(commit))
-                return;
+            if (!live.getAsBoolean() || !sameIdentity(candidate, identity)) return;
+            for (LegacyActionTrigger trigger : selected) {
+                if (!allow(trigger, player, candidate, identity) || !live.getAsBoolean()) return;
+            }
             if (cancel) cancel(event);
-            NiActionContext context = context(player, item, event);
+            NiActionContext context = context(player, candidate, event);
             if (context == null) return;
-            if (consume
-                    && !consume(
-                            trigger.getConsume(),
-                            player,
-                            item,
-                            context,
-                            remainder -> stageReturn(commit, remainder),
-                            id,
-                            () -> stable(commit))) return;
-            actual = commitSource(commit, item);
-            if (!commit.committed || !active() || commit.interrupted) return;
+            Consumer<ItemStack> remainder =
+                    commit == null
+                            ? value -> {
+                                if (delayReturn) returnLater(player, value);
+                                else returnImmediately(player, value);
+                            }
+                            : value -> stageReturn(commit, value);
+            if (!consume(rule, player, candidate, context, remainder, identity.id(), live)) return;
+            consumed = true;
+            actual = commit == null ? candidate : commitSource(commit, candidate);
+            if (commit != null && !commit.committed) return;
+            if (!active()
+                    || !player.isOnline()
+                    || players.session(player.getUniqueId()) != session
+                    || commit != null && commit.interrupted) return;
             bindActual(context, actual);
-            run(trigger, context);
+            ItemIdentity committedIdentity =
+                    actual == null || actual.isEmpty() ? null : NiItemNodes.identity(actual);
+            for (LegacyActionTrigger trigger : selected) {
+                if (!active()
+                        || !player.isOnline()
+                        || players.session(player.getUniqueId()) != session
+                        || commit != null && (commit.interrupted || !source.ownsCommitted(actual)))
+                    break;
+                if (committedIdentity == null
+                        ? actual != null && !actual.isEmpty()
+                        : !sameIdentity(actual, committedIdentity)) break;
+                run(trigger, context);
+            }
         } finally {
-            try {
-                // Entity metadata needs an explicit update after synchronous live NBT edits.
-                // Re-read only our still-owned committed handle; never write an old value over
-                // a body replacement, a removed entity, or another catalog's work.
-                if (commit.committed && active() && !commit.interrupted)
-                    source.synchronizeEntity(actual);
-                if (source.entityEmpty()) cancel(event);
-            } finally {
-                endSource(commit);
+            if (consumed && event instanceof PlayerItemConsumeEvent) cancel(event);
+            if (commit != null) {
+                try {
+                    if (commit.committed) {
+                        source.synchronizeEntity(actual);
+                        if (source.entityEmpty()) cancel(event);
+                    }
+                } finally {
+                    endSource(commit);
+                }
+            } else if (delayedCaller) {
+                delayedEventDepth--;
+                returns.end(returnOwner);
+                finishEvent();
             }
         }
     }
@@ -605,55 +597,55 @@ public final class ItemTriggers implements AutoCloseable {
     /** Tick groups count matching slot visits, rather than elapsed wall-clock time. */
     public void tick(String type, Player player, ItemStack item) {
         requireThread();
-        if (!active() || !hasKey(type) || item == null || item.isEmpty()) return;
-        String id = NiItemNodes.itemId(item);
-        LegacyActionTrigger trigger = id == null ? null : find(id, type);
+        LegacyActionTrigger trigger = lookup(type, item);
         if (trigger == null) return;
         ItemIdentity identity = NiItemNodes.identity(item);
         if (identity == null) return;
+        long session = players.session(player.getUniqueId());
         long interval = trigger.getTick().value(() -> context(player, item, null), 10);
-        if (!active() || !trigger.getTick().isConstant() && !sameIdentity(item, identity)) return;
-        String group = "TICK-" + trigger.getGroup();
-        if (interval > 0) {
-            long remaining = (Long) players.getMetadata(player.getUniqueId(), group, 0L);
-            if (remaining > 0) {
-                players.setMetadata(player.getUniqueId(), group, remaining - 1);
-                return;
-            }
+        if (!active()
+                || !sameIdentity(item, identity)
+                || session == 0
+                || players.session(player.getUniqueId()) != session) return;
+        String counter = "TICK-" + trigger.getGroup();
+        long remaining = (Long) players.getMetadata(player.getUniqueId(), counter, 0L);
+        if (TriggerRules.skipVisit(interval, remaining)) {
+            players.setMetadata(player.getUniqueId(), counter, remaining - 1);
+            return;
         }
-        if (!allow(trigger, player, item, identity) || !active()) return;
+        if (!allow(trigger, player, item, identity)
+                || !active()
+                || players.session(player.getUniqueId()) != session) return;
         NiActionContext context = context(player, item, null);
         if (context == null) return;
-        players.setMetadata(player.getUniqueId(), group, interval);
+        players.setMetadata(player.getUniqueId(), counter, interval);
         run(trigger, context);
     }
 
     @SuppressWarnings("deprecation")
     private boolean cooldown(LegacyActionTrigger trigger, Player player) {
-        // The old cooldown evaluator deliberately receives only the player, not item context.
+        if (!active()) return true;
         long duration = trigger.getCooldown().value(() -> contexts.apply(player, null), 1000);
         if (!active()) return true;
         long remaining =
                 players.checkCooldown(player.getUniqueId(), "ni:" + trigger.getGroup(), duration);
         if (remaining <= 0) return false;
-        if (cooldownMessage != null)
+        if (cooldownMessage != null && !cooldownMessage.isEmpty())
             player.sendActionBar(
-                    cooldownMessage.replace("{time}", String.format("%.1f", remaining / 1000.0)));
+                    cooldownMessage.replace(
+                            "{time}", String.format(Locale.ROOT, "%.1f", remaining / 1000d)));
         return true;
     }
 
     private boolean allow(
             LegacyActionTrigger trigger, Player player, ItemStack item, ItemIdentity identity) {
         if (!active() || !sameIdentity(item, identity)) return false;
-        LegacyItemActionType type = LegacyItemActionType.matchType(key(trigger.getType()));
-        if (type == null) return true;
         LegacyItemInfo info = inspect(item);
         if (info == null) return false;
-        LegacyItemActionEvent event = new LegacyItemActionEvent(player, item, info, type, trigger);
-        Bukkit.getPluginManager().callEvent(event);
-        // A listener may clear/replace the stack or reload this revision. Do not consume a
-        // different identity, build a context from missing metadata, or call the next gate.
-        return !event.isCancelled() && active() && sameIdentity(item, identity);
+        LegacyItemActionType type = LegacyItemActionType.matchType(key(trigger.getType()));
+        if (type != null && !new LegacyItemActionEvent(player, item, info, type, trigger).call())
+            return false;
+        return active() && sameIdentity(item, identity) && inspect(item) != null;
     }
 
     private static boolean sameIdentity(ItemStack item, ItemIdentity expected) {
@@ -686,35 +678,6 @@ public final class ItemTriggers implements AutoCloseable {
         }
     }
 
-    private boolean consume(
-            ConsumeInfo consume,
-            Player player,
-            ItemStack item,
-            NiActionContext context,
-            boolean delayReturn,
-            String id) {
-        return consume(
-                consume,
-                player,
-                item,
-                context,
-                remainder -> {
-                    if (delayReturn) returnLater(player, remainder);
-                    else returnImmediately(player, remainder);
-                },
-                id);
-    }
-
-    private boolean consume(
-            ConsumeInfo consume,
-            Player player,
-            ItemStack item,
-            NiActionContext context,
-            Consumer<ItemStack> returnRemainder,
-            String id) {
-        return consume(consume, player, item, context, returnRemainder, id, this::active);
-    }
-
     @SuppressWarnings({"rawtypes", "unchecked"})
     private boolean consume(
             ConsumeInfo consume,
@@ -724,46 +687,44 @@ public final class ItemTriggers implements AutoCloseable {
             Consumer<ItemStack> returnRemainder,
             String id,
             BooleanSupplier validSource) {
-        if (consume == null) return active() && validSource.getAsBoolean();
+        ItemIdentity identity = NiItemNodes.identity(item);
+        long session = players.session(player.getUniqueId());
+        BooleanSupplier valid =
+                () ->
+                        active()
+                                && player.isOnline()
+                                && session != 0
+                                && players.session(player.getUniqueId()) == session
+                                && validSource.getAsBoolean()
+                                && identity != null
+                                && identity.id().equals(id)
+                                && sameIdentity(item, identity)
+                                && inspect(item) != null;
+        if (!valid.getAsBoolean()) return false;
+        if (consume == null) return true;
         if (consume.hasPre()) consume.getPre().eval(context);
-        // pre may launch delayed work or return STOP. Neither outcome is the consume condition.
-        if (!active() || !validSource.getAsBoolean()) return false;
-        if (consume.getCondition() != null) {
-            boolean accepted = context.condition(consume.getCondition());
-            if (!active() || !validSource.getAsBoolean()) return false;
-            if (!accepted) return deny(consume, context);
-        }
-        int amount = 1;
-        if (consume.getAmount() != null) {
-            String text =
-                    context.invoke(
-                            () ->
-                                    LegacySectionUtils.parseItemSection(
-                                            consume.getAmount(),
-                                            item,
-                                            context.getNbt(),
-                                            context.getData(),
-                                            player,
-                                            (Map) context.getGlobal(),
-                                            null));
-            try {
-                amount = Integer.parseInt(text);
-            } catch (NumberFormatException ignored) {
-                /* NI falls back to one for non-integer text. */
-            }
-        }
-        if (!active() || !validSource.getAsBoolean()) return false;
-        if (amount <= 0) {
-            // Intentional correction: invalid consume counts must never increase the stack/charge.
-            plugin.getLogger()
-                    .warning(
-                            "ItemActions / "
-                                    + id
-                                    + ": consume.amount must be positive; rejected "
-                                    + amount);
+        if (!valid.getAsBoolean()) return false;
+        boolean condition = context.condition(consume.getCondition());
+        if (!valid.getAsBoolean()) return false;
+        if (!condition) return deny(consume, context);
+        String configured = consume.getAmount();
+        String parsed =
+                configured == null
+                        ? null
+                        : context.invoke(
+                                () ->
+                                        LegacySectionUtils.parseItemSection(
+                                                configured,
+                                                item,
+                                                context.getNbt(),
+                                                context.getData(),
+                                                player,
+                                                (Map) context.getGlobal(),
+                                                null));
+        if (!valid.getAsBoolean()) return false;
+        int amount = TriggerRules.amount(parsed);
+        if (amount <= 0 || !deduct(item, amount, context, returnRemainder))
             return deny(consume, context);
-        }
-        if (!deduct(item, amount, context, returnRemainder)) return deny(consume, context);
         return true;
     }
 
@@ -777,25 +738,20 @@ public final class ItemTriggers implements AutoCloseable {
             int amount,
             NiActionContext context,
             Consumer<ItemStack> returnRemainder) {
-        requireThread();
-        if (item.isEmpty()) return false;
         LegacyItemInfo info = (LegacyItemInfo) context.get(NiContextKeys.ITEM_INFO);
-        Integer charge = info.getNeigeItems().getIntOrNull("charge");
-        if (charge == null) {
-            if (item.getAmount() < amount) return false;
-            item.setAmount(item.getAmount() - amount);
-            return true;
+        Integer charge = NiItemNodes.legacyInteger(item, "charge");
+        TriggerRules.Deduction plan = TriggerRules.deduct(item.getAmount(), charge, amount);
+        if (plan == null) return false;
+        ItemStack remainder = null;
+        if (plan.returnedCount() > 0) {
+            remainder = item.clone();
+            remainder.setAmount(plan.returnedCount());
         }
-        if (charge < amount) return false;
-        ItemStack remainder = item.getAmount() > 1 ? item.clone() : null;
-        if (remainder != null) remainder.setAmount(item.getAmount() - 1);
-        if (charge == amount) item.setAmount(0);
-        else {
-            // The live facade commits only CUSTOM_DATA and preserves the independent state,
-            // including compat_ni_rolls, while updating script references to this same tag.
-            info.getNeigeItems().putInt("charge", charge - amount);
-            item.setAmount(1);
-        }
+        // The live facade validates a detached custom-data candidate before its sole write.
+        // Reuse this facade so references already passed to scripts observe the new charge.
+        if (charge != null && plan.affectedCount() > 0)
+            info.getNeigeItems().putInt("charge", plan.charge());
+        item.setAmount(plan.affectedCount());
         if (remainder != null) returnRemainder.accept(remainder);
         return true;
     }
@@ -902,36 +858,7 @@ public final class ItemTriggers implements AutoCloseable {
 
     /** Implements the optional old format upgrade in memory, retaining every input file verbatim. */
     private static NiConfig normalize(NiConfig source, boolean upgrade) {
-        if (!upgrade) return source;
-        Map<String, Object> values = new LinkedHashMap<>(source.values());
-        NiConfig consume = source.section("consume");
-        boolean changed = false;
-        for (String type : List.of("left", "right", "all", "eat", "drop", "pick")) {
-            if (!source.contains(type) || source.section(type) != null) continue;
-            changed = true;
-            Map<String, Object> trigger = new LinkedHashMap<>();
-            boolean hasConsume =
-                    consume != null
-                            && (consume.bool(type, false)
-                                    || type.equals("all")
-                                            && (consume.bool("left", false)
-                                                    || consume.bool("right", false)));
-            if (hasConsume) {
-                Map<String, Object> amount = new LinkedHashMap<>();
-                if (consume.get("amount") != null) amount.put("amount", consume.get("amount"));
-                trigger.put("consume", amount);
-            }
-            if (source.get("cooldown") != null) trigger.put("cooldown", source.get("cooldown"));
-            if (source.get("group") != null) trigger.put("group", source.get("group"));
-            trigger.put("sync", source.strings(type));
-            values.put(type, trigger);
-        }
-        if (changed) {
-            values.remove("consume");
-            values.remove("cooldown");
-            values.remove("group");
-        }
-        return new NiConfig(values);
+        return TriggerRules.normalize(source, upgrade);
     }
 
     private record ConsumeSlot(UUID player, int slot) {}

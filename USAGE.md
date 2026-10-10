@@ -1,6 +1,8 @@
 # ItemLoom 使用说明
 
-适用于 `2.1.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+适用于 `2.2.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+
+集合节点的随机实现保留权重、重复项及缓存规则，但不保证同一个随机种子的逐次结果与旧版本相同。已保存的锁定随机值仍按原配置规则读取。
 
 ## NI 配置与数据目录
 

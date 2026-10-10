@@ -40,6 +40,8 @@ public final class ItemsProbe extends JavaPlugin {
                         case "action-threads" -> ActionThreadProbe.run(this);
                         case "action-runtime" -> ActionRuntimeProbe.run(this);
                         case "triggers" -> ItemTriggerProbe.run(this);
+                        case "runtime-rules" ->
+                                CompletableFuture.completedFuture(RuntimeRulesProbe.run(this));
                         case "consume-commit" -> ConsumeCommitProbe.run(this);
                         case "trigger-commit" -> TriggerCommitProbe.run(this);
                         case "scheduler" -> SchedulerProbe.run(this);
@@ -65,6 +67,10 @@ public final class ItemsProbe extends JavaPlugin {
                                 CompletableFuture.completedFuture(
                                         GenerationPlanProbe.paired(java.nio.file.Path.of(args[1])));
                         case "display" -> ItemDisplayProbe.run(this);
+                        case "display-proofs" ->
+                                CompletableFuture.completedFuture(DisplayProofProbe.run(this));
+                        case "display-template" ->
+                                CompletableFuture.completedFuture(DisplayTemplateProbe.run(this));
                         case "return-ledger" -> ReturnLedgerProbe.run(this);
                         case "papi-config" -> CompletableFuture.completedFuture(papiConfig());
                         case "ni-placeholders" -> NiPlaceholderProbe.run(this, reference);

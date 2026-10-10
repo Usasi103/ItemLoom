@@ -1,0 +1,936 @@
+{
+  "schema_version": 1,
+  "version": "2.2.0",
+  "review_date": "2026-10-10",
+  "baseline_commit": "d5fc26d243dbfeb8517218c9b5b319d982c45cb0",
+  "baseline_project_files_reviewed": 137,
+  "scope": "All current production Java in core, compat-ni, compat-sx, paper26 and vendored source modules.",
+  "limits": [
+    "Retention is an engineering review decision, not proof of historical independent authorship.",
+    "Contracts and permitted API surfaces were supplied to fresh implementation workers; coordinator had source exposure.",
+    "No legal clean-room certification; GPL, upstream attribution and public history remain.",
+    "Dependency binaries and non-production files have separate responsibility/artifact review, not per-file Java hashes."
+  ],
+  "files": {
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiArithmetic.java": {
+      "classification": "retain-common-algorithm",
+      "reason": "Direct arithmetic evaluation with operator precedence is a standard algorithm. Current direct evaluation differs from upstream infix-to-postfix conversion, operator enum and logging wrapper. Missing-operand zero and exponent associativity are format behavior.",
+      "sha256_lf": "02e6932c045a8516fbe6e2d4476d2bc4b9cda2d3a622ccf42405ecf19e011202"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiCollectionNodes.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh contract implementation for decimal rejection sampling, finite weighted races, separately observed exceptional numeric boundaries, joins/repetition and condition scopes. Ordinary random trace identity is not promised.",
+      "sha256_lf": "e4674cd5627a8ca7a7ca06f712ba9d9f6d8e12846343792c85880fbd388e7e72"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiCompiledItem.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Prepared immutable configuration and compiled templates with a bounded rendered-YAML cache belong to ItemLoom's revision design; schema-key exclusion is required input behavior.",
+      "sha256_lf": "79e1c1996330a3b9a627e14645b96523215853113b0035610727a8bb7b16374e"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiConfig.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Immutable tree, generic copy/overlay/path traversal and coercions preserve current config behavior. Hash-based iteration reflects visible map-reader behavior but is not sufficient to identify a copied implementation.",
+      "sha256_lf": "efa1e3146c5e63484585895a7e0659badc38b4fdb4357009fa69392ed3120afe"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiEvaluation.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Request-local GenerationContext, scoped callbacks, cache ownership and explicit modes replace static section utility execution.",
+      "sha256_lf": "c8dd27a0d851672b914a0b97fca5030ba507ca63ba26b7ed89c85ce6da57601f"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiFormulaTokens.java": {
+      "classification": "retain-verified-replacement",
+      "reason": "Prior 2.1 replacement remains: regex operator spans and source slices replace mutable character-by-character numeric accumulation.",
+      "sha256_lf": "6938f43b384a0f18b5bd7f9189fdd206766923f5d3ab19adbdf463744e56303c"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiGradientText.java": {
+      "classification": "retain-verified-replacement",
+      "reason": "Prior 2.1 replacement projects colors by groups and slices instead of the old mutable RGB/character-step arrangement.",
+      "sha256_lf": "41b36a72af812a1270f8f3c6496d70982fb68c534b783570ebb318fcd96b9e23"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiInheritance.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Cached graph resolution, explicit cycle checks and immutable overlays differ from recursive mutation of Bukkit sections. Import vocabulary remains format behavior.",
+      "sha256_lf": "42f1abfb29b93715fc496824e4c081832646fd08f7eb32774ef059f692d22ce4"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiNodes.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Collection branches delegate to NiCollectionNodes; former choice/join/repeat/weighted/conditional bodies removed. Retained scalar, script and extension routing implement supported vocabulary through existing independent APIs.",
+      "sha256_lf": "e315ac7a86265123a98105a48a5c7bbc25b2e2f6eb900d5e3c5f4d7df274b61c"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiRepository.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Read-only snapshots, strict duplicates and prepared detached input differ from default-resource extraction and mutable registries.",
+      "sha256_lf": "0015e856b7b04e666dc01e1f0a6a76a2f367c932c1bbb08313dd59fa0e6b17bf"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiScripts.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Revision-owned engines, bounded caches and explicit scope lifecycle are different design. Standard Object.create/JSR223 mechanisms alone are not source-copy evidence.",
+      "sha256_lf": "a2ace177f4d0ed09991730f54bcff7769fb02cde8a098829284fa643e0859693"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiSourceDirectory.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Raw byte snapshots and content rechecks enforce config immutability and concurrent-edit detection; no equivalent upstream manager boundary.",
+      "sha256_lf": "9fb2c0aba385f4252d1040596863fc6518f5c5d43d83bd11bc2840d742c205b1"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiTagValues.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Typed prefixes and homogeneous-array markers are the input language. Neutral Java maps/scalars/arrays plus ordinary parsers differ from upstream NBT wrapper ownership.",
+      "sha256_lf": "aa0e3ade07ceb4f9a8ddfe52d0916fc90db469c380e38879aa65e7061f5c784f"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiTemplate.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Compiled instruction program separates parsing from evaluation. Escape/delimiter syntax is contractual; split uses lookahead instead of old escape-state loop.",
+      "sha256_lf": "0b9782e633d2ec529705d243ca81fc2a1d57f1c850a092f55d917501cb69d111"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiTextNodes.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Modes/regex flags/output conventions mainly map grammar to JDK methods. Pattern cache is current ownership. Ordinary matcher/count/group glue does not justify wholesale rewrite.",
+      "sha256_lf": "a0aacacbd45ad60d1e6feb08bacec575de2b25caa68045bf8b4d08aa263ea99c"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/NiYaml.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Bukkit/SnakeYAML boundary and recursive detached conversion are ordinary glue required by the immutable model.",
+      "sha256_lf": "8ee5437ef20c06e86b104369227a2f707b67b15491f72fddd4398d7ff92a54e8"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActionContext.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Required aliases/shallow-clone semantics surround new lazy ScopeState, revision checks, metadata replay and scoped synchronized callbacks. Getters/builders are not copying evidence.",
+      "sha256_lf": "42f02d0bcb4666952349a20038d582315fb3d6f5fb2c9453377d1fdc86051673"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActionText.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Source-range/indexOf partition differs from old buffer/identified/invalid/hadSpace state; placeholder syntax remains compatible.",
+      "sha256_lf": "d04d8796a777e9583f65a93545829b1d607d186575b066c57d1c18ed9af4ce81"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiActions.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Compiler targets neutral ActionFlow combinators and host dispatch, replacing old concrete action hierarchy/run overloads. Type precedence and aliases remain format behavior.",
+      "sha256_lf": "92ce6a1fcf380667afaf7a5d08a1b78e90f3878c799cce37d08e727cf4d45494"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiContextKey.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Typed metadata descriptor is the promised script key interface; names, flags and getters are necessary DTO semantics.",
+      "sha256_lf": "bff12004d79a8bc6177a06e5987ec202a07a7e45065f407ee9df5e1535f7d2ae"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiContextKeys.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Key constants are externally visible metadata vocabulary used by scripts/hosts.",
+      "sha256_lf": "1c99fc5810678824ac834a91f023995cc2ba5d25b2bc261ce09babd15f3eca89"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/action/NiValues.java": {
+      "classification": "retain-common-algorithm-and-distinct-compiler",
+      "reason": "Function-based evaluators replace old evaluator classes; key/tree/contains wrap Java APIs. Small weighted-without-replacement sampler is common and lacks the distinctive combined arrangement of NiNodes.",
+      "sha256_lf": "f02bfd46163f910301e3f965796f52ca19b06d87fe4abd9b1b201836de10fb5d"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyActionManager.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Script facade forwards to NiActions/ActionFlow with required overload defaults; it does not keep the old execution hierarchy.",
+      "sha256_lf": "31c89f3e2ec208106c6c54b1e308145e8d6f9dddaa351b91503b10118ba39c90"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyActionResult.java": {
+      "classification": "retain-common-adapter",
+      "reason": "ActionFlow.Result facade preserves factories, comparison and stop semantics with ordinary delegation.",
+      "sha256_lf": "c75e0bb862d372ab115540864e86a8c4570ce2e052b2ad63666ffe8af8df5bb0"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyConfigReader.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Live Bukkit/map handles and detached views implement actual script access. Generic path walking/coercion overloads are common glue.",
+      "sha256_lf": "6d9fbf3ec0c6dedaea5ff27cdb4bc0776b13537a50c28a969d4de36a19b8d1e1"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyCustomSection.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Required constructors/callback signatures forward custom nodes into current evaluation/scripts.",
+      "sha256_lf": "b828caa1f88c4fe53aa87324a3de62b25ec54280e5b56849cef6552b646b8d35"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacyScriptBindings.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Synthetic namespace overlay/alias tree/JSAdapter bridge is ItemLoom-specific; upstream owns real classes instead of this emulation layer.",
+      "sha256_lf": "f71e2785751feb00cda485f5aea5a97ab2e8e6744bebbc73375096307d5e62b6"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacySection.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Required parser signatures delegate text/config execution into NiEvaluation instead of retaining old parser framework.",
+      "sha256_lf": "56a444d9cf1fc16a19cd3cd008471eb2aa3fbcb4b8a1088071aaa9eb1729078f"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacySectionRegistry.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Minimal live registration entry for supported custom script sections.",
+      "sha256_lf": "e88f2c2b5594b39822254acdb5b081a8478035961e4538c53e44fda6e1403caf"
+    },
+    "compat-ni/src/main/java/dev/itemloom/compat/ni/script/LegacySectionUtils.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Static script signatures and normalization delegate into active evaluation rather than duplicating old scanner implementation.",
+      "sha256_lf": "293747d1281d8d9d0535f8b3a809e7adc45464ccf32d2e5ccfb8a9a7367f28da"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxBranchTime.java": {
+      "classification": "retain-verified-replacement",
+      "reason": "Prior 2.1 decoded-alternative/offset-span replacement remains; old branch loop/mutable time scan not retained.",
+      "sha256_lf": "0e4d7cad2b6484ffa38a37afccb75b5fe86cefe510e5574dae70cae9418c8464"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxConfig.java": {
+      "classification": "retain-common-adapter",
+      "reason": "Detached immutable map/list copies and ItemStack clones differ from upstream static mutable config singleton.",
+      "sha256_lf": "1d53b3e0805a9cfa34bf11599a5bb79531b0ac48a65b7d360b61bd99ec5baecc"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxExpressions.java": {
+      "classification": "retain-distinct-implementation-with-common-adapters",
+      "reason": "Bounded recursive interpreter replaces Apache substitution handlers. Short lock/script/operators are behavior-constrained JDK/cache adapters; their order alone does not establish substantial copying.",
+      "sha256_lf": "78b19f8be522bedfff14caabec6b674894c409ad84d96f7b3fc2382b84a87f9c"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxMath.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh iterative operator/value-stack evaluator from syntax and numeric behavior contracts; no external Tools implementation is embedded.",
+      "sha256_lf": "2805eab113c42fd37b97bfdbececdf15a466cbd521e46cd70aa91930433fe2f7"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxRandom.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Validated prepared cumulative thresholds and binary lookup differ from mutable tuples, linear selection and config migration. Probability mathematics is common.",
+      "sha256_lf": "1dec6e0015eb0788a9d3e3969926763129b1f8091ab48a4f24d776f8644974a9"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxRepository.java": {
+      "classification": "retain-distinct-implementation",
+      "reason": "Read-only detached snapshots, strict validation and recheck differ from mutable generators/link registries and source field injection.",
+      "sha256_lf": "48edb4963adf6488fdd24994d832e99bc5240565ce520f2df9dc7cc6d6d890e7"
+    },
+    "compat-sx/src/main/java/dev/itemloom/compat/sx/SxScripts.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh JSR223 scope lifecycle and routing implementation from initialization/calling contracts and public Nashorn API probes; explicit dependency is Nashorn.",
+      "sha256_lf": "30ef69a22ce9a39a0f786782ab471e78c4b2329c0a052e14c0ea0a0cae0b75c0"
+    },
+    "core/src/main/java/dev/itemloom/core/ActionFlow.java": {
+      "classification": "I",
+      "reason": "Independent asynchronous composition: iterator/supplier run pump, nonrecursive completion draining, priority aggregation; unlike NI's action object hierarchy. Standard future/atomic mechanics are not upstream-expression evidence.",
+      "sha256_lf": "fd1c3ec1a417800995307b2a2fe5f37c040a55ae7dc1704e0ce3c771ae890bde"
+    },
+    "core/src/main/java/dev/itemloom/core/GenerationBudget.java": {
+      "classification": "I",
+      "reason": "Sticky per-request work/item/stack limits, retained rewards counted separately from callback work. Used by pack and bag generation; no comparable NI/SX transaction budget in inspected managers.",
+      "sha256_lf": "71ff74c72675e2a267dbea7e96c314017b9f024f617955bdf35c43b7c1f32e0f"
+    },
+    "core/src/main/java/dev/itemloom/core/GenerationContext.java": {
+      "classification": "I",
+      "reason": "Typed identity keys, request-local saved rolls, explicit sharing and dependency-path cycle detection. Saved roll vocabulary overlaps format behavior; representation and scope are ItemLoom-owned.",
+      "sha256_lf": "5d8a872756e9b85bc013b30c6e386c6dec7fd1a058c4f86b7de5aa4e785ad224"
+    },
+    "core/src/main/java/dev/itemloom/core/ItemEngine.java": {
+      "classification": "I",
+      "reason": "Immutable catalog publication via advancing revisions, atomic swap and one-revision generation snapshot. NI/SX mutable manager registries are materially different.",
+      "sha256_lf": "ebcc0f475ac9c241ee15cd67185c00d554dda223ae5481a18d85daa7b6a03b12"
+    },
+    "core/src/main/java/dev/itemloom/core/ItemIdentity.java": {
+      "classification": "A",
+      "reason": "Defensively copied immutable identity record. ID and saved-values association is a data contract, not a substantive algorithm.",
+      "sha256_lf": "f65ed27f7b39adc032f623d00136b08be7b036229c6e5fae1fd0e9cb281a2a0a"
+    },
+    "core/src/main/java/dev/itemloom/core/ItemRecipe.java": {
+      "classification": "A",
+      "reason": "Single-method generic creation contract, platform-independent and unrelated to upstream class hierarchy.",
+      "sha256_lf": "bf794152876c3ac7e3c56f83513435ce84870ee26640a47ed6f46434ab9be397"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemActionEvent.java": {
+      "classification": "A",
+      "reason": "Bukkit Event/Cancellable/HandlerList template with ItemLoom trigger key, nullable async constructor boundary for adapters. Getter and cancellation boilerplate is standard API mechanics.",
+      "sha256_lf": "20efe11a030ec5373e88b6281c8780a5381957f4eeaf0d63ef49f50f1a4e577c"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemContext.java": {
+      "classification": "A",
+      "reason": "One typed context key for viewer. ItemLoom GenerationContext API binding, no substantive algorithm.",
+      "sha256_lf": "d6c48d90d3483b72ed48870d36fd6b6bd3499fa9bad4d69c2eacd3e38c61c314"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemDisplayEvent.java": {
+      "classification": "A",
+      "reason": "Detached-item event contract and standard Bukkit handlers; explicit count/type restriction belongs to ItemLoom display boundary.",
+      "sha256_lf": "f70d913453b77371aba94d6c776bb109ec3ff58d8b149fe8996547bfc0ae8f41"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemGenerateEvent.java": {
+      "classification": "A",
+      "reason": "Generation event data carrier, independent identity and saved-roll exposure. Standard event dispatch/getter mechanics.",
+      "sha256_lf": "646bcf298653e6ac07556eae9e9a1e2208d4df4a59727a0615fd12ccfbb47eb8"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemLoom.java": {
+      "classification": "A",
+      "reason": "Own ServicesManager-facing API, providers/groups/save/identity contracts. No promise of arbitrary NI/SX Java API; interfaces contain no substantial implementation.",
+      "sha256_lf": "ac2267ed250f7dc604b84df05a7a142fd190ad933ba8b6a41bba477d07f77170"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemProvider.java": {
+      "classification": "A",
+      "reason": "Record validates ownership with defensive snapshots of items and group member lists. Generic API collection mechanics, not a source-specific algorithm.",
+      "sha256_lf": "3a415eabfee2cbaa27a3323ba4f099c37b44534335d9507ca5ef4232c5b52b26"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemsReloadEvent.java": {
+      "classification": "A",
+      "reason": "New successful-publication event and Bukkit HandlerList boilerplate.",
+      "sha256_lf": "d4de44e13309107e1d716a292048372dbf8b6b3b36d140e8c3ff93d2ab5d0746"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ProviderRegistration.java": {
+      "classification": "A",
+      "reason": "AutoCloseable lifecycle interface. No algorithm.",
+      "sha256_lf": "8562931d1d320773f5d8a83cc4b5a863c284a2129cd6ce28a89fc69a706f5b9f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/ItemLoomPlugin.java": {
+      "classification": "I",
+      "reason": "Own Keystone init, fallback input root, ServicesManager publication and shutdown order. Standard JavaPlugin lifecycle wiring and plugin-name checks are API mechanics.",
+      "sha256_lf": "3e634e3faaf1cdb13cd1fc30210556ad6dda8736f720320aa489f8d389d7e51e"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/ItemProviders.java": {
+      "classification": "I",
+      "reason": "Own immutable provider registration publications, namespaced collision checks, active-owner leases, recursion fence, callback copy and event ownership. Distinct from mutable NI/SX global generator registries.",
+      "sha256_lf": "545007d68fe85165d3a309ed3fbc4514301bb09a4269d21536b722bc503747fb"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/ItemsService.java": {
+      "classification": "I",
+      "reason": "Prepare/verify/publish paired NI-SX catalog transaction, revision monotonicity, provider conflict checks, rollback cleanup and service-owned state/ledger. Not old mutable reload-in-place manager organization.",
+      "sha256_lf": "eaa5facd65e96e418ce7672b5c38a7cc4f22ada6711e805f7742295dc3b95b97"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ActionInputCapture.java": {
+      "classification": "I",
+      "reason": "Source semantics retained for FIFO chat/sign capture, keys and clear behavior. Separate queued/in-flight ownership, quit fences, out-of-monitor completions and Keystone prompt ownership are independent concurrency architecture.",
+      "sha256_lf": "93c7022c6a84db240320ea3e97fd908751215c4dc017ca97d29d0dc0489554a6"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ActionTasks.java": {
+      "classification": "I",
+      "reason": "Revision-owned pending and derived futures, timers, cancellable lifetimes, thread dispatch, callbacks outside lock. Not NI's global scheduler/user-catcher organization.",
+      "sha256_lf": "a0ab2afbdf2b156f3d4d42a72cb2afd577078cef7939667e9fa518007e875f70"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/DropMotion.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh per-list motion preparation and index-to-velocity projection from externally observable contracts.",
+      "sha256_lf": "8b54f886ad7254c8c6c92b3684bc66ea3c82d9cbd62aae4e55550761119c7f22"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/DropOwnership.java": {
+      "classification": "F",
+      "reason": "Owner/hide metadata and pickup-message policy mirror documented format rules; added persistent namespace/change event, merge disallow for null-owner/hide mismatch. 20-line event gate is direct business-policy wiring; no broader source algorithm inferred.",
+      "sha256_lf": "71678b5c89f22b05d9c78cef51ce4fd09e01a37055fef7eaa45787e450a11f20"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/DropVisibility.java": {
+      "classification": "I",
+      "reason": "Paper tracking-gate visibility, own hide overrides, watched-set retirement, reentrant tracking and moonrise untracking correction. NI PacketHandler attempts metadata/scoreboard path; materially different solution.",
+      "sha256_lf": "24eb53f5be1804a30e137f6f082774fbc72ba085a31997ce0da7d2b40c6306a7"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/DurabilityOutcome.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh pure durability result calculation and unbreaking trial rules from behavior contracts.",
+      "sha256_lf": "fd514694a995844e0461744f91bb079231048fbfee8c705b76b2c4d013f4ddac"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemDrops.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "List-level fancy drop dispatch and offset behavior replaced from contracts via DropMotion. Native spawn/ownership/visibility and return policies retained after review.",
+      "sha256_lf": "45313b48a93244523e574b5319f90b3cca9c39420a0ee78ad37e77cc48fa70e0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemDurabilityService.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Damage decisions and TNT behavior replaced from contracts; native state codec, lifecycle and return-ledger ownership plumbing retained after review.",
+      "sha256_lf": "497003adb81fbbdba5fb7600054d591354c6d6d2516090d9d6015d1e5d37f413"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemInventoryActions.java": {
+      "classification": "F",
+      "reason": "take-ni-item retains syntax and consume-up-to-available behavior; indexed inventory commit using min differs from upstream amount branch. Negative-count minting explicitly rejected. Short inventory arithmetic is routine.",
+      "sha256_lf": "12e8dcc5f090d73ee7ef72af134e722e26e8be79de089bacc3dec465d98b4b51"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemListeners.java": {
+      "classification": "F",
+      "reason": "Format trigger-to-event routing, equipment/slot names and dispatch order preserved. Physical-source ownership/candidate commits, revision fences and warning isolation are ItemLoom architecture. Tick slot/equipment mapping matches NI Java TickInventory but is the public 41-slot trigger mapping, not enough alone for copying finding.",
+      "sha256_lf": "2039000df3d7ac084591108b00f0c1d0eb4ce3f570c846bfed8daabe8395b546"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemMaintenance.java": {
+      "classification": "F",
+      "reason": "Expiry then update policy and one-second opened-inventory check are NI behavior. Version-owned activation, scalar snapshot reads, post-event equality guard and per-slot warning isolation are structurally distinct. No separate NiMaintenance.java exists in this scoped baseline.",
+      "sha256_lf": "539bb56f5e9c534ce80d5c8b18f292af6ac23a219fd1b028f8b04780537799cd"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemTriggers.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Trigger routing/gating, consumption, tick and legacy normalization replaced from contracts. Source commit/return ledger machinery retained; physical source/session ownership rechecked between script gates and paired bodies.",
+      "sha256_lf": "55da788affa3a0cf9abbe91a273496aa33b123ea1bab5881b474b78c3420774f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ItemUseRestrictions.java": {
+      "classification": "F",
+      "reason": "Format usage restrictions are converted to own ID bit masks; actual crafting/enchant/place listeners use standard Bukkit events. SX shares these policy names but implementation does not retain its plugin utility/listener architecture.",
+      "sha256_lf": "20416009a65624334ce17d0574a8202e7e6b6030d9d452c3f4df9dc089fa0b53"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/LootBagConfig.java": {
+      "classification": "I",
+      "reason": "Own strict loot-bags.yml grammar, one-source validation, bounded weights/ranges and immutable rule publication. No NI pack grammar or SX generator structures reused.",
+      "sha256_lf": "b23b531c7e8ef39335b7a15b340b7ba9af62087cd5a7bc4e4d19063254dc3563"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/LootBags.java": {
+      "classification": "I",
+      "reason": "Generate-before-charge transaction, revision and provider fences, fixed rewards authorized by source commit and quarantined returns. Cumulative weighted choice/min stack splitting are generic algorithms, not source provenance by themselves.",
+      "sha256_lf": "e964548c5ee39451ebf1f009831747bfe700e0b45d6e55e1943fe61cad79b8f1"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/PaperActions.java": {
+      "classification": "F",
+      "reason": "NI action names, defaults and observable combo/expiry semantics retained. Most effects are short direct Bukkit/Vault/Mythic API calls, consolidated dispatch; scheduling goes through own revision host. Combo gap-check + append is a short policy rule; insufficient to infer larger implementation copy.",
+      "sha256_lf": "fb0cc3c1f2e1625f657808127d2b66f8037cfbc3e48eef0c270bfa654ab08cd3"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/PlayerActionState.java": {
+      "classification": "I",
+      "reason": "Own service-lifetime sessions/weak player references, separate catalog lifecycle and synchronized cooldown state. Timestamp cooldown formula and metadata maps are common mechanics; reconnect/return ownership differs from NI user registry.",
+      "sha256_lf": "5e92d43037b0952b11a156a2d58a846a768855ed68e1a1994b46df997628227f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/ReturnLedger.java": {
+      "classification": "I",
+      "reason": "Explicit staged/ready/unknown obligations, leases, verified leftovers, no automatic recovered delivery, asynchronous atomic diagnostics and shutdown fences. NI ActionUtils returns copies immediately/later without this architecture.",
+      "sha256_lf": "f525e14dd0f292867f201edad23aa7a71a1be26bc40c22d724962c245111cae7"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/TriggerRules.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh strict amount, charge/count conservation and legacy in-memory normalization decisions from contracts.",
+      "sha256_lf": "d00541c03442de60cc7e88e19b1ba3768f3f990dac74b3d9f26e4f063a7c26e0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/action/TriggerSource.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Reviewed physical source/commit adapter retained, with explicit committed-reference ownership check added for paired trigger dispatch.",
+      "sha256_lf": "e3a330334d61653232996f9472104337a5562567b21cf7f73cdbeb467c6fc40f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/command/GiveRequest.java": {
+      "classification": "I",
+      "reason": "Own bounded command syntax stack/roll plus strict streaming JSON string map; no NI command parser retained.",
+      "sha256_lf": "3a804df80d126125d921b3a6813bb1857945277d8ac89f4f1bb12e561f16daae"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/command/ItemCommands.java": {
+      "classification": "I",
+      "reason": "Own Keystone command tree, bounded concurrent jobs, one independent generation per tick, prepare-before-deliver and revision fences. Common stack partition and native spawn APIs only; old NI/SX commands have different registrations/output.",
+      "sha256_lf": "1f77ceb8ce547ace6694f94128146734b281a25854cba614e8dc91755dfb0654"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/InventoryRequirements.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh inventory requirement calculation from stack aggregation and duplicate-request behavior contracts.",
+      "sha256_lf": "8b542a61523cfb48cde87ff8883db33a770af49a73ab6aaff395a55a4712bdc0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiCatalog.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Revision-owned lifecycle, transactional item reload, recipe ownership fences, event/order and script aliases. NI ItemGenerator/ScriptManager/ClientBoundData responsibilities are redistributed into immutable recipes and revision resources. display(264–295) is a short required viewer/roll binding bridge; its substantive template dependency is L4.",
+      "sha256_lf": "d9e251aa9f2900242255074de062cc34e24ee7f0daf9b31eb1b48ed9c317618b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiConfigViews.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Ordinary recursive map/list copy and Bukkit ConfigurationSection projection; no source-specific traversal state or algorithm. Required to detach mutable script mirrors from immutable NiConfig.",
+      "sha256_lf": "10fe03c57cb94afb0651292c595b445990e71244a1a3cb097fb41101893c6536"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiDisplayTemplate.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh compiled component recipes with staged dynamic resolution, isolated constant snapshots and separate raw/styled lore behavior.",
+      "sha256_lf": "54cb7e808b29522b0451768bac33acfb5f0633ad73a4233ad4193967fea350d5"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemAppearance.java": {
+      "classification": "COMMON_POLICY_RETAIN",
+      "reason": "Ordered schema interpretation uses shared compatibility aliases and short field rules (short conversions, empty lore, explicit component precedence), while emission directly targets modern NMS components on owned copies. ItemBuilder vocabulary is required; version-reflection/build-once state and upstream builder framework are absent. No additional substantive algorithm blocker established.",
+      "sha256_lf": "e1b8a2ef3123f9ccf9f7cd2a6edef398fa5c541ebf1d110ef55a34a7991bf83f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemData.java": {
+      "classification": "COMMON_POLICY_RETAIN",
+      "reason": "Persistent option key mapping (charge/max, durability/max, owner, flags, expiration) and value precedence are format rules. Modern identity fast path and migration fallback are ItemLoom-specific. Keep stored vocabulary; grouped schema switch alone is not a substantive provenance finding.",
+      "sha256_lf": "b059f6baab3a436fac7030e04dbd98dc09f74337b0989a04f93b1390215a8ea5"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemFiles.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Detached lossless snapshots, candidate compilation, disk/caller conflict checks, byte fences, StorageWriter commits and explicit rollback recovery differ from reference save routines. Required explicit save semantics; no ordinary load-time rewrites.",
+      "sha256_lf": "c26363a81c01dfcaa3ddfa376022504dd0e28eeb53bf71111d8e54cec29202ba"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemMigration.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "ItemLoom identity-envelope migration, conflict rejection, preserved unknown properties/compound roll projection and absence-preserving copy behavior are native migration logic. Old keys are stored-data vocabulary; recursive flatten is standard.",
+      "sha256_lf": "4b627ba5a5012576c48c54287546a3969812e6fb21977efa0fb7d524d5cacc5a"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemNodes.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Node dispatch and scalar/lore getter rules adapt existing format names. Modern/old identity projection, corrupt-schema checks and scalar no-materialization paths are ItemLoom-specific. deepString is ordinary compound lookup using grammar owned elsewhere.",
+      "sha256_lf": "0d1f34c0595aed806d8235ae45df5ec16e10065a05273c734e95c65e21e196e0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemOperations.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Regeneration is detached prepare/finish with thread/revision checks and concurrent mutation fences around callbacks. Reference rebuild/update ordering and charge/durability carry-over are observable policy, not evidence that this native transaction implementation is copied. Four-line preserveState overlap remains ordinary direct policy.",
+      "sha256_lf": "ce6837eb904e32730c86a95cf23359fca334ffc9097b9c7f4816699b16eb7527"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemRegistry.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Two mutable script maps plus atomic immutable Published catalog/hash/display/token object, candidate reload and owner validation are independent revision architecture. Original config grouping is ordinary data projection.",
+      "sha256_lf": "32347bf338000f80f77ace19d6c054ca052da29b24577d83f6a449ff73815008"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemScriptAliases.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Necessary old import/global names and public constructor/event/editor wiring only; business behavior delegates to native components and revision-owned hosts. Alias strings are API vocabulary.",
+      "sha256_lf": "922c86cc9828a2997ef58f738aa28ec2b7913b1a8b45a30ca578e2f14d425a1d"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiItemSnapshot.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Lossless per-component capture tests typed YAML and codec round-trip equivalence, preserves explicit removals/empty custom data, rejects conflicting identities/transient data, and falls back to native SNBT. Distinct from reference builder/save mapping.",
+      "sha256_lf": "c6eb5bfb86e318cd5e6bdaae5e5bf02c52d831afb55a3bc0fa88c46398f5301c"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiPackRegistry.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Script-visible map contract retained through RevisionMap; reload compiles all candidates and verifies source bytes before publication. Upstream global singleton manager architecture not retained.",
+      "sha256_lf": "244f992d460940824f4782a6649e7e1c228cbba734fbe5c0e7e9517ef6096e20"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiPaperRecipe.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Engine recipe separates expansion, immutable/static native prototype, cache admission, optional external source acquisition, generated event data and envelope application. Required static-before-dynamic/event rules correspond to NI behavior; state organization differs. L4 dependency must be replaced.",
+      "sha256_lf": "2551a5b5bbe83fe7302063fc1e9f668fb101728ded8bf593035d349412fad608"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiPlaceholderRequests.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Inventory count delegates to InventoryRequirements; retained request routing, thread checks and latest-main-thread cache serve the asynchronous placeholder contract.",
+      "sha256_lf": "b904f91189a24f04df12f980dcca286904db1b54c22cf22bd60e13a14025003b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/NiTranslations.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Read existing cache only; direct current component/custom-name and skull/book/lodestone special-case translation. Standard item translation policy and cache JSON loading do not establish reuse of NI versioned reflection/download machinery.",
+      "sha256_lf": "3ce2b03965ec0f20f044382f8d266dbe760f33b23750806fac387a611f16ea07"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/RevisionMap.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "AbstractMap adapter gates all live views/mutations and publishes candidate validated replacements; snapshot-backed iterator writes through to owner. Required for revision closure/thread checks; not upstream ConcurrentHashMap implementation.",
+      "sha256_lf": "8ddbee9ba3355b3cd462490793d887d3290635c567282d0d185b7f0d253f4b9e"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbt.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Removed escaped-path scanner; delegates to EscapedPath. Retained validated candidate commits, linked-child snapshots and typed adapters serve the supported script contract.",
+      "sha256_lf": "e1e0586cd0fe39e0aff1789c590c7e76cbb7c3407d229fcc609273d3c0c36547"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbtItemStack.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Live projection bridge uses three-way per-key conflict merge, validated ItemLoom envelope translation, unknown state preservation and sole native component commit. Clone/getter/comparison signatures and size/type ordering are ordinary compatibility API; no upstream reflection wrapper retained.",
+      "sha256_lf": "cadea7677676b755e93a351885a1758194f59558a9136ff5900c319e5c2b13d5"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/nbt/LegacyNbtUtils.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "NBT I/O and item CODEC wrappers directly use NbtIo, TagParser, CraftRegistry and migration. Method names/file signatures are required script API, not a bespoke serialization algorithm.",
+      "sha256_lf": "402fccef2da273ae0d215a197c0f223504277cbf513fda25640a09f502286e30"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/ActionHelperScope.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 action-library replacement: per-action Java dispatch table, shared argument conversions, native session/cooldown service and small helper policies. Inspect complete scope and callbacks; no prior monolithic JS library remains here. Names/player property mappings and sequential amount semantics are required surface behavior.",
+      "sha256_lf": "ef010b24305c005b6ae7fb5684027c9ad76ea046bee126b9aad952108ffdd9cf"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/ActionHelperValues.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 action-helper boundary; JavaScript absence/truth/numeric coercion, sequence access and public-mirror/reflection bridges are short standard interop. Keep original callback exception behavior.",
+      "sha256_lf": "a7f31c0315c38c87bde478333e9a910808da385ed65ba31bff0960070df4b727"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/ActionScriptLibrary.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 replacement installs generated aliases and generic Java-call wrappers in each action scope; compiled program cache is revision-owned. Independent function installation and bindings restoration; alias vocabulary alone is not substantive reuse.",
+      "sha256_lf": "c2399d059d658deeb482a35ba9b4a31b8125ed9cc36f20a7800eb43559a6aa0c"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/EscapedPath.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh path-segment parser from escape behavior examples; no upstream scanner retained.",
+      "sha256_lf": "e5f927c8f6316060b2429d3d1ec1f2bc75251487485135629ffef33cc662e0f6"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyActionTrigger.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Configured trigger/getter/evaluator/consume fields preserve script API. Actual dispatch uses ActionTasks and context/revision guards, constructors capture owner through AbstractJSObject. The short actions+async/sync order is the intended configuration behavior, not enough to establish a substantive copied algorithm.",
+      "sha256_lf": "51c537d1e2832c21d0adc0b3245488e43e2703da93116973d63b74ce7181cf4b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyHooks.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Tiny dependency isolation/placeholder/item-source facade; invokes shared native services and frontend parser. No standalone hook-loading machinery copied.",
+      "sha256_lf": "274f50afe329697d6d719ae8b0409ca39df2ff64b1a213f8356a0540168cb23c"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemActionEvent.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Bukkit event adaptation and old getters bridge to independent ItemActionEvent. Required names/fields, null checks, call/cancel boilerplate are not substantive algorithms.",
+      "sha256_lf": "7ec8077ed4facaee5d7f9c3a033d20208a7cead2efd8d0c6a3c618ad398f3b7f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemActionType.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Exact enum/string trigger vocabulary and standard map lookup. Prior 2.1 audit specifically separates 66-line enum vocabulary overlap from business implementation.",
+      "sha256_lf": "658b6d4fc93b05260658ebe808788fbcf8a02314aec77bc53f34d753b37b0fa1"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemConfig.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Small original-config holder and ordinary YAML load/error adapter; constructor accepts containing configuration as required. No independent domain algorithm.",
+      "sha256_lf": "656efe570c91c9581909a6cff373bf725d8acbcf1eac0e782b56f120b6f2cae7"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemConfigManager.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Standalone script directory preserves public fields and last-ID semantics; entire directory loaded/prepared with source verification before stable-view replacement. Different failure-safe publication from old direct reload.",
+      "sha256_lf": "900bfec00a1d48385bc5afa548cf852d331179a576fdbb47ce48bbfff50a49bd"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemConstructors.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Nashorn constructor wrappers translate old arities/types into owner-bound ItemLoom objects; instance/class discovery boilerplate. Needed because old-package JVM classes are not installed.",
+      "sha256_lf": "c9257581232500465023fe037d06ca93730986b05593a2a93344f7079a8cb22b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemEditorManager.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Removed literal selection/output assembly; delegates to LegacyLiteralText. Retained supported editor routing, native component commits and previously replaced regex transformer.",
+      "sha256_lf": "a54a4687bf049add032697ceae09e8367503656a71ea088357056efe23d68928"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemEditorManagerNbt.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Re-read recursive subtree replacement and typed leaf handling; it no longer uses former parent/current/previous path state machine. Boundary behavior retained as required; known 2.1 structural finding already addressed.",
+      "sha256_lf": "f4fb008bf3ef817619189bf30d9b6af219a8570622832673fdffac62834ac014"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemExpirationEvent.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Bukkit cancellable event data and HandlerList/call boilerplate only. Required plugin/script event contract.",
+      "sha256_lf": "85f400ee0748c58bfa68fd97ccb7217def36dd7b994e562191d8200d062ce6c4"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemGenerateEvent.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Independent ItemGenerateEvent adapter plus detached configuration projection from actual Generated result. Getters/supplier/lifecycle event shape, not upstream generator algorithm.",
+      "sha256_lf": "d0b472e475d1ed8b5c943bf37b9908ddf349d3105af364858c4b66f9ba03ec1b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemGenerator.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Revision-owned compiled recipe view, metadata/getter policies and create delegation. Getter names/config keys inherited from format; generation algorithm is NiPaperRecipe. Rebuild data collection is ordinary typed config projection.",
+      "sha256_lf": "ad67505d519a051da5609376c0fe3f5b61fff3091a05690ca6bb8e7e56a10252"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemInfo.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Identity inspection through ItemStateCodec, linked legacy view, DTO getters and lazy scalar/compound data projection. Recursive flatten is ordinary tree projection; storage keys/API shape retained.",
+      "sha256_lf": "a4bf4f1358e8eff77361c3be9bcb05ef61498686cf9184ce25a97f957f77b709"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemManager.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Facade delegates registry/save/update/rebuild/numeric operations into native owners; overload defaults/getters are necessary script API. JSON scalar validation is ordinary parser-boundary code; substantive work audited in native callees.",
+      "sha256_lf": "6540224eeea21f2cfdc10cdddf28093685e1150cd386fe1d32381bad4eebfd6c"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemPack.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 pack-selection/generation replacement remains: delegates to independent PackSelection, one acquisition factory/draw policy. Config cache admission and detached copy ownership are native. Five-field grammar, public getters and quotient/remainder stack splitting are short format/direct arithmetic policy.",
+      "sha256_lf": "b228359c6b68935f09b3cc367ed8b348fa963d8de5c83b39c03ea3a6e4ad7583"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemPacketEvent.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Minimal independent ItemDisplayEvent alias and old getters/call/event-name. No algorithm.",
+      "sha256_lf": "eca9f39aec001dc8a602dec84df918863b186f7a39651e7eb5dc48bb96e9bbcd"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemPlaceholder.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Removed percent scanner; delegates to LegacyPercentText. Retained expansion registry, lifecycle checks and component transaction plumbing are reviewed platform adapters.",
+      "sha256_lf": "3cdd9bc48f9f0abd5d932e71ee407b38cb1bec74f4adb7004283f5011334eacc"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemUpdateEvent.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Two cancellable Bukkit DTO gates and standard HandlerList/dispatch, with required player/item/data/generator fields. No substantive algorithm.",
+      "sha256_lf": "2d39be1a279b30c2743bcc1866309e4c9beb941aebbea4544864b86f0b6de78a"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemUtils.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Legacy overloads delegate to native drops/generation/NBT/translation; sectionValue exposes small exact field rules. Observation of partial-drop failures is native safety behavior. No entire ItemUtils source implementation retained.",
+      "sha256_lf": "f40080dae4ecc69f982fc2fab94dbeb04627137b0fe0bafa68a49219073634c0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyLiteralText.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh interval-based literal replacement implementation preserving rule priority and name/lore iteration contracts.",
+      "sha256_lf": "e03707a7e3f177b3976127ddc1cbb3c31ce543f75d4d84905d2626df50f5cebe"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyPercentText.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh recognition and color-boundary implementation from percent-placeholder observable behavior, preserving unknown or malformed expressions.",
+      "sha256_lf": "5551a8f45efa62c9099cb86c77817704274a3ce9f082f5f4fe77628b6735e5b0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyPlayerUtils.java": {
+      "classification": "COMMON_ADAPTER_RETAIN",
+      "reason": "Private PlayerActionState/DropOwnership bridge and synchronized combo snapshot replace Bukkit/global session storage internals. Metadata key and cooldown API compatibility remains necessary.",
+      "sha256_lf": "fa46ab624560cb9b08766b112f22969e04c3af6d1967d70b422fb659433e66ed"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyRegexText.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 contract replacement uses immutable MatchResult snapshots and explicit source-span assembly, replacing upstream nested appendReplacement/appendTail mechanism. Re-read full file; no new blocker.",
+      "sha256_lf": "ff40206a1add3b5a11eb8258f15f50f3060e844ed5a9edaf8e45a06705c1d40d"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyScheduler.java": {
+      "classification": "INDEPENDENT_DESIGN_RETAIN",
+      "reason": "Revision-owned ActionTasks, captured script/action scope, guarded futures/continuations, deadlock checks, cancellation propagation and closed-engine observer rules differ materially from NI direct Bukkit scheduler wrappers. Old overload names and null/error behavior are API contract.",
+      "sha256_lf": "f5952e6425fac5c7ad3cdc34b8c97e30dc90e0a35e66dc0f9fe5b4fbf695e746"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/NbtScriptAliases.java": {
+      "classification": "API_SURFACE_RETAIN",
+      "reason": "Only old names mapped to ItemLoom static types; standard NBT type vocabulary. No implementation algorithm.",
+      "sha256_lf": "bd7f97fc78e89c7a8b74dad89c5d9803ccce0c9f9ab39ce830e14142925cafd6"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compat/script/PackSelection.java": {
+      "classification": "REVIEWED_2_1_RETAIN",
+      "reason": "Known 2.1 replacement: independent exponential ranks and shuffled traversal replace identity-map weighted-total removal. Required additional success evaluation/minimum/max semantics and budget callbacks retained. Full file re-read.",
+      "sha256_lf": "72458eaa7a004a8063ee36ede5f2433c3c38983990b57a4ec92babbc1413acdc"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/display/DisplayLedger.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh connection-local preparation/authorization model with bounded canonical/appearance retention and successful-write proof commits. Coordinator integrated 26.2 sulfur nested-item protection.",
+      "sha256_lf": "8a55ff82d28f5715ced82fa2fa54aa5bcc920cc43daee313b85055f43e828a5b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/display/ItemDisplayService.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Reviewed display lifecycle/routing retained. Coordinator replaced shallow callback copies with ProofItemCopies so script/event edits cannot mutate canonical components.",
+      "sha256_lf": "1b6a125a9422f808699388f8359832876b26a836ec573513337b604fe38b2402"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/display/ItemPackets.java": {
+      "classification": "A",
+      "reason": "Direct Paper26.2 packet constructor/accessor mapping and ordinary list/map reconstruction. Packet field layouts are imposed by API. NI reflective Plan uses same field names because these are server contracts.",
+      "sha256_lf": "ed2d77d0af30c0c68f119cd6b1785b7674816ff0d892f13f352d910bdb0788a9"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/display/OrderedDisplayHandler.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Reviewed bounded queue/order/fallback implementation retained. Coordinator replaced shallow queued copies with ProofItemCopies to detach mutable payloads before main-thread rendering.",
+      "sha256_lf": "45b5676f0a965ddaaa8f3ef17f711076c4670e070dfa576214eef244d570f0d7"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/display/ProofItemCopies.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Fresh exact item-map snapshot boundary using platform APIs. Coordinator extended it to audited mutable component payloads, fireworks and sulfur-cube nested items; known immutable/registry-owned values are retained.",
+      "sha256_lf": "9dd30b5536cb8e238accad7b05ab2688babdb6631a538004bab975505d6676c6"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/ExternalItemMaterial.java": {
+      "classification": "I",
+      "reason": "Own explicit itembridge grammar and forbidden NI/SX/ItemLoom provider policy, normalization and errors. Short string parsing, no source-derived substantive algorithm.",
+      "sha256_lf": "1391867fc71fdda3ea2524a4630f12eb566c7bc540179d5b433730fa208f26fc"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/ItemBridgeSource.java": {
+      "classification": "I",
+      "reason": "Baseline adapter uses public builder/discovery with live owner checks and result cloning. Dependency source/provider filtering owned by coordinator; this classification does not certify vendored ItemBridge dependency. Read exact baseline Git blob after root began modifying current file.",
+      "sha256_lf": "11867b78c4d4821ecb2a43a1056b0138330ed5a1336457bdcec8b5881457848b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/MythicDrops.java": {
+      "classification": "I",
+      "reason": "Native MM5 drop registration via public reflection/proxy and ItemLoom parameter contract; Mythic owns selection/delivery. Different from NI/SX broad hook managers. Class/method names and invocation mechanics are API vocabulary.",
+      "sha256_lf": "66c908e05caf51b13a29803f2f396f5c447e1fd48ecfcedf2c7b6ccc3ba21aec"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/MythicLootTables.java": {
+      "classification": "I",
+      "reason": "Own item-only table validation, cycle/depth/expanded-work bounds and generation before bag commit. Uses MM public methods without implementing MM selection. Standard graph memoization is not upstream-source evidence.",
+      "sha256_lf": "8fa86f21ff7549df667eb5b8210b2e64a06a5ed687065da1d9997941a53e6015"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/NiPapiExpansion.java": {
+      "classification": "I",
+      "reason": "Own bounded previous-result async cache, revision invalidation, one-tick batches and namespace ownership checks. NI PapiExpansion evaluates directly with global engine/script cache; materially different boundary.",
+      "sha256_lf": "e998cda0658018a8e5978b7c6213fb4cff413e2421927f1c21353a9fb681ca7c"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/OptionalItemIntegrations.java": {
+      "classification": "A",
+      "reason": "Optional public Vault/Mythic method binding isolated by live plugin/classloader; reflection and exception propagation are ordinary integration mechanics. Does not expose or implement upstream custom item engines.",
+      "sha256_lf": "0ded9d886e81d2ca2b1a243bd8eb3bb3066cb48f10b1406490d0f8a6b0a68c4b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/OptionalItemSources.java": {
+      "classification": "F",
+      "reason": "Legacy provider lookup names/order are compatibility behavior; routes through ItemBridge, live source checks and detached clones. Explicit grammar and exclusion of NI/SX engines are own boundary. No substantive source algorithm found.",
+      "sha256_lf": "57369a479976c3aeaa2ecc542e5e4889ad39900253778530e108c6ef16c92566"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/PapiBridge.java": {
+      "classification": "A",
+      "reason": "Registered-placeholder conversion and one PAPI setPlaceholders call; exact namespace syntax is compatibility vocabulary, not algorithm reuse.",
+      "sha256_lf": "39196a2ad57ba2461c5389d1cdc12887bb6f943edd7bde6e6d424246d7a52aa8"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/nms/ItemStateCodec.java": {
+      "classification": "I",
+      "reason": "Own versioned itemloom:items envelope with schema/id/rolls/null_rolls/properties and strict validation; string-only borrowed identity queries; legacy id fallback only. Native data fields/API use alone do not prove origin; envelope differs from NI NeigeItems id/data JSON and SX separate keys.",
+      "sha256_lf": "24e85a0dd49c119b3f412e31d4d37d77438b8409893f4dfe71d1d65d59cd598b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/nms/NmsItems.java": {
+      "classification": "A",
+      "reason": "Direct 26.2 custom-data/component codecs, safe candidate patch replacement and Java scalar/list/array-to-Tag conversion. NBT type dispatch mirrors platform type universe, not upstream item-language algorithms. Craft mirror empty replacement fix is explicit independent adaptation.",
+      "sha256_lf": "ef3126d0b87d626fa1ae42618238d4aa64ed7d08aa032aac50e91dd8a82c11f6"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/sx/SxCatalog.java": {
+      "classification": "F",
+      "reason": "SX aliases/scripts/lock values/update flags/protect paths kept as format behavior. Bounded alias resolution, revision-owned scripts, clone/equality commit and modern component path protection differ from upstream IUpdate/ItemManager; map path traversal is routine. No demonstrated substantive copy kernel beyond declared historical format influence.",
+      "sha256_lf": "2d0af8a17d47dd81c2de1069060b1bc72ab0f6ba6293e69831da977316ddfb93"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/sx/SxMaintenance.java": {
+      "classification": "F",
+      "reason": "Same activity-driven once-per-second maintenance intent as SX ItemManager, with UUID dedup queue, publication fences, refresh and throttled failures. Queue snapshot/clear/visit is common event-batching mechanics and insufficient alone for copying finding.",
+      "sha256_lf": "780b236043655c98735fd63507d265a3f05ac1acb0904f6fdf9e55c81fd510b0"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/sx/SxMaterials.java": {
+      "classification": "F",
+      "reason": "Modern material exact-match priority, numeric/legacy ID support, inline damage syntax and namespace handling are observable compatibility. Regex suffix validation and Paper enum-metadata caches differ from XMaterial path; standard Material APIs.",
+      "sha256_lf": "70d787675a2010e8315d5c5bbc40ffaedfea07e94656339c9b7786fcf73b0802"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/sx/SxPaperRecipe.java": {
+      "classification": "F",
+      "reason": "Full generator reviewed against GeneratorDefault/Import: fields, defaults, durability formulas, flag aliases, ProtectNBT plus ! removal and AttributeModifiers.UUID int-array conversion are source-informed format rules. Strict field validation, owned prototypes/dynamic detection, direct component edits and changed potion/attribute paths are different structure. Field-by-field Bukkit setter sequence and short type conversions are insufficient substantive-copy evidence; not independent-history certification.",
+      "sha256_lf": "aa2afbc5e048ef646d89d79df5b0582be52b8bc079effbc40312fe490cbb7a96"
+    },
+    "vendor/itembridge/src/main/java/cn/gtemc/itembridge/hook/HookHelper.java": {
+      "classification": "attributed-dependency-customization",
+      "reason": "ItemLoom discovery customization for pinned MIT ItemBridge 1.0.32; removes NI/SX provider registrations and class links. Remaining provider/core bytecode remains attributed upstream dependency.",
+      "sha256_lf": "2bf28b1fb2f8655bc65a135addeb28c7b002c70217ca7d2d2b9f9ce425d86b58"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/Keystone.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "ba1338c54f968a13b9e2f98be734199ccd11b5597bc9ec73964c638eb980f8e5"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/ArgumentNode.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "206eb2166bd3c2966234dcabc758781fbc28bf669bbbe731d046121af34331ec"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandAction.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "79cdeb0c17e66fdb2624004d957fcacc89f7d9601a33a7ef100fba769ae108ef"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandBuilder.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "65a945f4f7981ca6c94f2aa8a2d2fb9c134924357557d48a1f02c1b3043de6e9"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandContext.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "3e19604adb9bf0316226b7aebc0a79c728332668fc55c38a2f1c07e072a77941"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandFeedback.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "30bb783db8864cf37a2a6b7d9c6907ffafb283c51f20190d49653937c94e514a"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandHelp.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "505334e871e3adcb7b64b304055e0ccfbbdb41d824ba346dfcb26cc0dd6a6db2"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandNode.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "803c1758c428dd0ad0b44efecbd95539d49a9ec3ec560dca89daf3d2424d25b7"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandRegistry.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "5407f12cae5e48be0669e53d00ca92c3808aba07d9e1eae668c7f636c7eac718"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/CommandTokens.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "d76892d9f41033b2209cf9836d7655f6022ad4fc31e39c757355390803429ee5"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/LiteralNode.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "79b6b2c5d9e9c96101c98e4f0cbe79bf06bde3b6ef157da8815f08adeafa8d6a"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/Restriction.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "a0243557e6a85ef0175a6bd6e0281b577a1258831f711144d36a397a41d0fa00"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/RootCommand.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "34cdff54914b1c3da0bcf90653c05d34eb8e5f1399a70f883d16ea87f75edf90"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/command/Suggester.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "82e591bd883dd910978612e7e3092fc9712c508b7041af672dd3f3a6dad9bff4"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/ConfigFile.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "cd31e210f46cb7848e67d2d0f432535c543608837474fc31b6cc0598c46fc64b"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/ConfigProblems.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "6405225f68bd0bdf6ac94eaf754d0a39f30334ae734c16cc0a27796f7e19cee6"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/LenientSection.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "9f5571d938b4ca191dd89e64809f16752afcf76c656dde53307437aae61f56fd"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/LineBreaks.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "9cecd005df5971becc0b8c42eea17e0703f31c5865e1bcdfb37bc5c5536a8aeb"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/LoadProblem.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "286a495b42560689fabf84c682e482f86b053bc196e8a6885718604436ce7abe"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/ReloadTransaction.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "1938fe521c887fb969eaaaf29d3efadb5a81c6ada68325b48c5e9dd8471f71c4"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/UpgradePolicy.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "2b42b5c0832a9d1a53e85a2aa75d700c1048db0cd1b33b88ebd88e25d5610ba4"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/UpgradeReport.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "e2d992448b967e780719ac74ee63a8a5f5e7267256c0a32e6bbe5d050e1521fa"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/YamlPatch.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "4c738ef99a33c8d44fca986836b88596a5b171f839e72a137821b76ec716fea1"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/config/YamlUpgrade.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "0d58bd99b0288eb566661356c38d30cf845a5e4a29247367b8386d5987ae1821"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/event/Events.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "f612ecec5f360c119191255c5bd416ae341060c117144a9a38a010bb2eac055f"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/lang/Lang.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "00cc5b0feafd6a65faeb017e6bdd9ede5f16a2eff746ff65680d2363a381af89"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/lang/LangNode.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "a1b77e39a840011936709414e9d83193482e5ac90b2eb3ca35a3597324b9721a"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/lang/LangTransfer.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "d3414e1789da87bbf3b8c8fe8126aaf0644ae3b90994ec0770c4d153bdfe0770"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/log/Log.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "0c69df0acba2df13ff883c857ad19afdaf96ec48ca3aa394ec4f2ded81959315"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/storage/FileBackup.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "e7b74f1a86406be4e0cec15d01a2900de3c22c40fd5bcba28deb3a6b733ae858"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/storage/StorageWriter.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "9e3da053130525368a6e2d8fb74f5d3c726448a8b13a1cc0a2c99fb0c080c414"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/storage/WriteGuard.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "85928bd1a5a5af97a350b3eddb5a2114311d4ad9c0dd42cde44fadb30970ab3a"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/task/Task.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "a16abae8c916cf4b64fcdfc4da9fbf367f4813043f85b082567e0ffc9718b5cf"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/task/Tasks.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "f0b914b0478b51d6e143387e084a992378c6d9e5232701e93991fb954386c9e5"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/ui/SignInput.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "d445c914c85b817c195a04d9b773fe9bcf02a94ad021ea775e63404af8b6fee3"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/ui/SignPrompts.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "5797cac3ae967efa6b8d82e2b869ff8142435f80be4d97920f85c7b0b88d1bf7"
+    },
+    "vendor/keystone/src/main/java/dev/keystone/util/Texts.java": {
+      "classification": "attributed-dependency-source",
+      "reason": "Required Keystone subset, unchanged against vendor/keystone/upstream.json; explicit source dependency with origin and license.",
+      "sha256_lf": "687abf82a27e3eaa4d83331f98a1f17a47b4188e4882a4454633ddd0ff49aebe"
+    }
+  }
+}

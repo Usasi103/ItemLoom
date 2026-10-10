@@ -233,7 +233,7 @@ public final class ItemDisplayService implements Listener, AutoCloseable {
                                                             .length
                                                     != 0;
                             if (template == null && !placeholders && !listeners) return original;
-                            var copy = CraftItemStack.asCraftMirror(original.copy());
+                            var copy = CraftItemStack.asCraftMirror(ProofItemCopies.copy(original));
                             if (template != null) current.display(template, session.player, copy);
                             if (ordinary) {
                                 if (current.input()

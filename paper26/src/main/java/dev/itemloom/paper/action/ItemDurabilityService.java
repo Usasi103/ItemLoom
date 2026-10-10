@@ -92,67 +92,63 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
             boolean breakItem,
             PlayerItemDamageEvent event) {
         ItemsService.requireThread();
-        if (!active.getAsBoolean())
-            throw new IllegalStateException("Item durability revision has closed");
         if (damage < 0) return DamageResult.INVALID_DAMAGE;
         if (damage == 0) return DamageResult.ZERO_DAMAGE;
+        if (!active.getAsBoolean()) return DamageResult.VANILLA;
         State state = read(item);
         if (state == null) return DamageResult.VANILLA;
-        requireMaximum(state);
         if (state.current == 0) {
             if (event != null) event.setCancelled(true);
             return DamageResult.BROKEN_ITEM;
         }
-
-        int realDamage = damage;
-        if (event == null) {
-            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
-            if (unbreaking > 0) {
-                for (int i = 0; i < damage; i++)
-                    if (ThreadLocalRandom.current().nextLong((long) unbreaking + 1) != 0)
-                        realDamage--;
-            }
-        }
-        if (realDamage == 0) return DamageResult.ZERO_DAMAGE;
-
-        // Finish the owned candidate before splitting or publishing a returned remainder.
-        ItemStack prepared = item.clone();
-        ItemStack remainder = item.getAmount() > 1 ? item.clone() : null;
-        if (remainder != null) remainder.setAmount(item.getAmount() - 1);
-        prepared.setAmount(1);
+        requireMaximum(state);
+        int effective =
+                event == null
+                        ? DurabilityOutcome.effectiveDamage(
+                                damage,
+                                item.getEnchantmentLevel(Enchantment.UNBREAKING),
+                                ThreadLocalRandom.current())
+                        : damage;
+        if (effective == 0) return DamageResult.ZERO_DAMAGE;
+        int ordinaryMaximum = maximumDamage(item);
+        int priorDamage = damageValue(item);
         Material material = item.getType();
-        boolean exhausted = realDamage >= state.current;
-        boolean broken = exhausted && state.breakItem;
-        Integer eventDamage = null;
-        if (broken) {
-            if (breakItem) {
-                if (event == null) prepared.setAmount(0);
-                else eventDamage = maximumDamage(item) - damageValue(item) + 1;
-            }
-        } else {
-            int remaining = exhausted ? 0 : state.current - realDamage;
-            writeCurrent(prepared, state, remaining);
-            int expected =
-                    exhausted
-                            ? Math.max(0, maximumDamage(item) - 1)
-                            : (int)
-                                    (maximumDamage(item)
-                                            * (1 - (double) remaining / state.maximum));
-            if (event != null) eventDamage = expected - damageValue(item);
-            else if (maximumDamage(prepared) > 0)
-                CraftItemStack.unwrap(prepared).set(DataComponents.DAMAGE, expected);
+        var change =
+                DurabilityOutcome.change(
+                        state.current,
+                        state.maximum,
+                        ordinaryMaximum,
+                        effective,
+                        state.breakItem,
+                        breakItem && event == null);
+        ItemStack prepared = item.clone();
+        ItemStack remainder = null;
+        if (item.getAmount() > 1) {
+            remainder = item.clone();
+            remainder.setAmount(item.getAmount() - 1);
+        }
+        prepared.setAmount(change.count());
+        if (change.displayedDamage() != null) {
+            writeCurrent(prepared, state, change.remaining());
+            if (event == null && ordinaryMaximum > 0)
+                CraftItemStack.unwrap(prepared)
+                        .set(DataComponents.DAMAGE, change.displayedDamage());
         }
         NmsItems.replace(item, prepared);
-        if (eventDamage != null) event.setDamage(eventDamage);
+        // A returned unit becomes owned by the ledger only after the affected stack commits.
         if (remainder != null) catalog.triggers().returnLater(player, remainder);
-        if (exhausted) {
-            // Vanilla's lethal damage path records its own statistic after the event returns.
-            if (broken && event == null && material != Material.FIRE_CHARGE)
-                player.incrementStatistic(Statistic.BREAK_ITEM, material);
-            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
-            catalog.triggers().broken(player);
+        if (event != null) {
+            if (change.displayedDamage() != null)
+                event.setDamage(change.displayedDamage() - priorDamage);
+            else if (breakItem) event.setDamage(ordinaryMaximum - priorDamage + 1);
         }
-        return broken ? DamageResult.BREAK : DamageResult.SUCCESS;
+        if (change.exhausted()) {
+            catalog.triggers().broken(player);
+            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1, 1);
+            if (state.breakItem && breakItem && event == null && material != Material.FIRE_CHARGE)
+                player.incrementStatistic(Statistic.BREAK_ITEM, material);
+        }
+        return change.exhausted() && state.breakItem ? DamageResult.BREAK : DamageResult.SUCCESS;
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -216,33 +212,32 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
         ItemsService.requireThread();
         if (!active.getAsBoolean()
                 || event.isCancelled()
-                || event.getPlayer().getGameMode() == GameMode.CREATIVE
-                || event.getItem() == null
-                || event.getItem().getType() != Material.FIRE_CHARGE
+                || event.getAction() != Action.RIGHT_CLICK_BLOCK
                 || event.getClickedBlock() == null
                 || event.getClickedBlock().getType() != Material.TNT
-                || event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
-        Player player = event.getPlayer();
+                || event.getPlayer().getGameMode() == GameMode.CREATIVE) return;
         ItemStack item = event.getItem();
+        if (item == null || item.getType() != Material.FIRE_CHARGE) return;
+        Player player = event.getPlayer();
         DamageResult result = damage(player, item, 1, false, null);
         if (result == DamageResult.BROKEN_ITEM) {
             event.setCancelled(true);
-            catalog.triggers().broken(player);
-        } else if (result != DamageResult.VANILLA && result != DamageResult.BREAK) {
-            // Vanilla consumes one charge after this callback; compensate only a surviving item.
-            item.setAmount(item.getAmount() + 1);
-            BukkitTask[] scheduled = new BukkitTask[1];
-            scheduled[0] =
-                    Bukkit.getScheduler()
-                            .runTask(
-                                    plugin,
-                                    () -> {
-                                        refreshTasks.remove(scheduled[0]);
-                                        if (active.getAsBoolean() && player.isOnline())
-                                            player.updateInventory();
-                                    });
-            refreshTasks.add(scheduled[0]);
+            return;
         }
+        if (result != DamageResult.SUCCESS && result != DamageResult.ZERO_DAMAGE) return;
+        // Vanilla removes one charge after this event, leaving this surviving custom unit.
+        item.setAmount(item.getAmount() + 1);
+        BukkitTask[] task = new BukkitTask[1];
+        task[0] =
+                Bukkit.getScheduler()
+                        .runTask(
+                                plugin,
+                                () -> {
+                                    refreshTasks.remove(task[0]);
+                                    if (active.getAsBoolean() && player.isOnline())
+                                        player.updateInventory();
+                                });
+        refreshTasks.add(task[0]);
     }
 
     private static void repair(ItemStack item, State state, int remaining) {

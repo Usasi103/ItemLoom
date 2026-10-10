@@ -36,6 +36,7 @@ def main():
     current = re.search(r'(?m)^version=(.+)$', (PROJECT / 'gradle.properties').read_text(encoding='utf-8'))
     if not current or current.group(1).strip() != version:
         raise ValueError('JAR version does not match the current source version')
+    subprocess.run([sys.executable, '-B', str(PROJECT / 'tools/verify_source_review.py')], check=True)
     report = output.with_name(output.name + '-artifact-check.json')
     subprocess.run([sys.executable, '-B', str(PROJECT / 'tools/verify_artifact.py'), str(jar), '--out', str(report)], check=True)
     output.mkdir(parents=True)

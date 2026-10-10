@@ -127,7 +127,7 @@ public final class OrderedDisplayHandler extends ChannelDuplexHandler {
                                                 "Display queue exceeded "
                                                         + MAX_ITEMS
                                                         + " item stacks");
-                                    return stack.copy();
+                                    return ProofItemCopies.copy(stack);
                                 });
             } catch (RuntimeException failure) {
                 fallback(ctx, failure);

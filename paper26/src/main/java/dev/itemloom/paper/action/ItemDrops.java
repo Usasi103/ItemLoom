@@ -80,41 +80,31 @@ public final class ItemDrops {
             String y,
             String angle) {
         Location at = location.clone();
-        List<ItemStack> entries = new ArrayList<>(stacks);
+        List<ItemStack> requested = new ArrayList<>(stacks);
         return scheduler.callSyncStrict(
                 () -> {
                     owner.ensureActive();
-                    boolean fancy = x != null && y != null && angle != null;
-                    double offsetX = fancy ? offset(x) : 0, offsetY = fancy ? offset(y) : 0;
-                    List<Item> result = new ArrayList<>();
-                    for (int i = 0; i < entries.size(); i++) {
-                        Vector velocity = fancy ? new Vector(offsetX, offsetY, 0) : null;
-                        if (fancy && (angle.equals("round") || angle.equals("random"))) {
-                            double phase = Math.PI * 2 * i / entries.size();
-                            // Keep NI's two independent angles for random mode.
-                            double cos =
-                                    Math.cos(
-                                            angle.equals("random")
-                                                    ? Math.PI
-                                                            * 2
-                                                            * ThreadLocalRandom.current()
-                                                                    .nextDouble()
-                                                    : phase);
-                            double sin =
-                                    Math.sin(
-                                            angle.equals("random")
-                                                    ? Math.PI
-                                                            * 2
-                                                            * ThreadLocalRandom.current()
-                                                                    .nextDouble()
-                                                    : phase);
-                            velocity.setX(cos * offsetX).setZ(-sin * offsetX);
+                    var random = ThreadLocalRandom.current();
+                    DropMotion motion = DropMotion.prepare(x, y, angle, random);
+                    List<Item> accepted = new ArrayList<>();
+                    for (int index = 0; index < requested.size(); index++) {
+                        Vector velocity = null;
+                        if (motion != null) {
+                            var value = motion.at(index, requested.size(), random);
+                            velocity = new Vector(value.x(), value.y(), value.z());
                         }
-                        Item dropped =
-                                single(at, entries.get(i), trigger, null, null, false, velocity);
-                        if (dropped != null) result.add(dropped);
+                        Item entity =
+                                single(
+                                        at,
+                                        requested.get(index),
+                                        trigger,
+                                        null,
+                                        null,
+                                        false,
+                                        velocity);
+                        if (entity != null) accepted.add(entity);
                     }
-                    return result;
+                    return accepted;
                 });
     }
 
@@ -162,24 +152,5 @@ public final class ItemDrops {
                 entity, org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.CUSTOM)) return null;
         if (velocity != null) result.setVelocity(velocity);
         return result;
-    }
-
-    private static double offset(String text) {
-        int separator = text.indexOf('-');
-        if (separator < 0) {
-            try {
-                return Double.parseDouble(text);
-            } catch (NumberFormatException invalid) {
-                return 0.1;
-            }
-        }
-        double min, max;
-        try {
-            min = Double.parseDouble(text.substring(0, separator));
-            max = Double.parseDouble(text.substring(separator + 1));
-        } catch (NumberFormatException invalid) {
-            return 0.1;
-        }
-        return ThreadLocalRandom.current().nextDouble(min, max);
     }
 }

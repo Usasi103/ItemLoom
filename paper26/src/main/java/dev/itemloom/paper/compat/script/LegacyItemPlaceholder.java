@@ -5,7 +5,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BiFunction;
-import java.util.regex.Pattern;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
@@ -21,7 +20,6 @@ import org.bukkit.inventory.ItemStack;
 
 /** Percent placeholder and JSON replacement contract from NI, owned by one catalog revision. */
 public final class LegacyItemPlaceholder {
-    private static final Pattern COLORS = Pattern.compile("§+[a-z0-9]");
     public final LegacyItemPlaceholder INSTANCE = this;
     private final NiItemOperations owner;
     private final HashMap<String, BiFunction<ItemStack, String, String>> expansions =
@@ -62,37 +60,14 @@ public final class LegacyItemPlaceholder {
 
     public ParseResult parse(ItemStack item, String text) {
         owner.ensureActive();
-        int cursor = text.indexOf('%'), copied = 0;
-        StringBuilder output = null;
-        while (cursor >= 0 && cursor + 1 < text.length()) {
-            int separator = -1, end = cursor + 1;
-            for (; end < text.length(); end++) {
-                char value = text.charAt(end);
-                if (value == '%' || value == ' ' && separator < 0) break;
-                if (value == '_' && separator < 0) separator = end;
-            }
-            if (end < text.length() && text.charAt(end) == '%') {
-                String id =
-                        text.substring(cursor + 1, separator < 0 ? end : separator)
-                                .toLowerCase(Locale.getDefault());
-                if (id.indexOf('§') >= 0) id = COLORS.matcher(id).replaceAll("");
-                var expansion = expansions.get(id);
-                if (expansion != null) {
-                    String replacement =
-                            expansion.apply(
-                                    item, separator < 0 ? "" : text.substring(separator + 1, end));
-                    if (replacement != null) {
-                        if (output == null) output = new StringBuilder(text.length());
-                        output.append(text, copied, cursor).append(replacement);
-                        copied = end + 1;
-                    }
-                }
-            }
-            cursor = text.indexOf('%', end + 1);
-        }
-        return output == null
-                ? new ParseResult(text, false)
-                : new ParseResult(output.append(text, copied, text.length()).toString(), true);
+        LegacyPercentText.Result result =
+                LegacyPercentText.parse(
+                        text,
+                        (id, parameters) -> {
+                            var expansion = expansions.get(id);
+                            return expansion == null ? null : expansion.apply(item, parameters);
+                        });
+        return new ParseResult(result.text(), result.changed());
     }
 
     public void itemParse(ItemStack item) {

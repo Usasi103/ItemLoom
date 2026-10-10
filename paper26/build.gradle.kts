@@ -1,7 +1,32 @@
+import java.security.MessageDigest
+
 plugins {
     `java-library`
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
     id("com.gradleup.shadow") version "9.0.0"
+}
+
+val itemBridgeInput by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+// Keep ItemBridge's core and external providers. Its discovery implementation eagerly links
+// excluded providers, so a separately attributed discovery source is compiled below.
+val itemBridgeRuntime by tasks.registering(Jar::class) {
+    archiveFileName.set("itembridge-1.0.32-filtered.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("dependencies"))
+    from(provider { zipTree(itemBridgeInput.singleFile) })
+    exclude("cn/gtemc/itembridge/hook/NeigeItemsProvider*.class",
+        "cn/gtemc/itembridge/hook/SXItemProvider*.class",
+        "cn/gtemc/itembridge/hook/HookHelper*.class")
+    doFirst {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(itemBridgeInput.singleFile.readBytes()).joinToString("") { "%02x".format(it) }
+        check(digest == "07276894b33aa8ee7c3b9d2969295b40668aafcbaa75d3049de1bc659c99054e") {
+            "ItemBridge input changed; review the provider filter and discovery source before updating"
+        }
+    }
 }
 
 dependencies {
@@ -10,10 +35,13 @@ dependencies {
     implementation(project(":compat-ni"))
     implementation(project(":compat-sx"))
     implementation(project(":keystone-runtime"))
-    implementation("cn.gtemc:itembridge:1.0.32")
+    add(itemBridgeInput.name, "cn.gtemc:itembridge:1.0.32")
+    implementation(files(itemBridgeRuntime))
     compileOnly("me.clip:placeholderapi:2.12.3")
     compileOnly("org.openjdk.nashorn:nashorn-core:15.4")
 }
+
+sourceSets.main { java.srcDir(rootProject.file("vendor/itembridge/src/main/java")) }
 
 tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
 tasks.jar { manifest.attributes["paperweight-mappings-namespace"] = "mojang" }
@@ -36,6 +64,10 @@ tasks.shadowJar {
     exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class", "META-INF/versions/*/module-info.class")
     from(rootProject.file("LICENSE"))
     from(rootProject.file("NOTICE.md"))
+    from(rootProject.file("vendor/itembridge/README.md")) {
+        into("META-INF/licenses")
+        rename { "itembridge-modifications.md" }
+    }
     manifest.attributes["paperweight-mappings-namespace"] = "mojang"
 }
 tasks.assemble { dependsOn(tasks.shadowJar) }

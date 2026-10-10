@@ -50,6 +50,7 @@ public final class ItemBridgeProbe {
             legacyOrder(owner, verified);
             failures(owner, verified);
             availability(verified);
+            excludedProviders(verified);
             actualCraftEngine(verified, limits);
             report.put("passed", true);
         } catch (Throwable failure) {
@@ -284,6 +285,30 @@ public final class ItemBridgeProbe {
         check(
                 !first.isEmpty() && !second.isEmpty() && first != second,
                 "installed CraftEngine builds the explicitly selected fixture twice",
+                verified);
+    }
+
+    private static void excludedProviders(List<String> verified) throws Exception {
+        ClassLoader loader = OptionalItemSources.class.getClassLoader();
+        for (String name : List.of("NeigeItemsProvider", "SXItemProvider")) {
+            String type = "dev.itemloom.internal.itembridge.hook." + name;
+            check(
+                    loader.getResource(type.replace('.', '/') + ".class") == null,
+                    name + " has no packaged bytecode",
+                    verified);
+            try {
+                Class.forName(type, false, loader);
+                throw new AssertionError(type + " remains loadable");
+            } catch (ClassNotFoundException expected) {
+                verified.add(name + " cannot be loaded by the plugin classloader");
+            }
+        }
+        // Exercise discovery even with no optional provider installed; merely loading the
+        // resolver must not link a removed provider or require a missing plugin's API.
+        OptionalItemSources discovered = new OptionalItemSources();
+        check(
+                discovered.getHookedItem("vn:stone").getType() == Material.STONE,
+                "provider discovery remains usable without NI/SX adapters",
                 verified);
     }
 

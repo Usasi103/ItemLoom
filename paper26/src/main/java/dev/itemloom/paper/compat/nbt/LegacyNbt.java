@@ -1,5 +1,7 @@
 package dev.itemloom.paper.compat.nbt;
 
+import dev.itemloom.paper.compat.script.EscapedPath;
+
 import java.util.AbstractList;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
@@ -572,7 +574,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         public LegacyNbt getDeep(String path, char separator, char escape) {
             LegacyNbt current = this;
-            for (String key : split(path, separator, escape)) {
+            for (String key : EscapedPath.split(path, separator, escape)) {
                 if (!(current instanceof Compound compound)) return null;
                 current = compound.get(key);
             }
@@ -589,7 +591,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         public void putDeep(
                 String path, LegacyNbt value, boolean force, char separator, char escape) {
-            List<String> keys = split(path, separator, escape);
+            List<String> keys = EscapedPath.split(path, separator, escape);
             Insert prepared = new Insert(value, store);
             store.change(
                     tag,
@@ -613,7 +615,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public void deleteDeep(String path) {
-            List<String> keys = split(path, '.', '\\');
+            List<String> keys = EscapedPath.split(path, '.', '\\');
             store.change(
                     tag,
                     node -> {
@@ -2272,26 +2274,6 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         public End clone() {
             return this;
         }
-    }
-
-    private static List<String> split(String text, char separator, char escape) {
-        List<String> result = new ArrayList<>();
-        StringBuilder part = new StringBuilder();
-        boolean escaped = false;
-        for (int index = 0; index < text.length(); index++) {
-            char current = text.charAt(index);
-            if (current == separator && !escaped) {
-                result.add(part.toString());
-                part.setLength(0);
-            } else {
-                if (current != escape && current != separator && escaped) part.append(escape);
-                if (current != escape || escaped) part.append(current);
-            }
-            escaped = current == escape && !escaped;
-        }
-        if (escaped) part.append(escape);
-        result.add(part.toString());
-        return result;
     }
 
     public static final class Type {

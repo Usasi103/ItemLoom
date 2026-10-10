@@ -47,6 +47,17 @@ repositories declared in Gradle. The required Keystone source subset is included
 `vendor/keystone`; a private repository or prebuilt local Keystone JAR is not required.
 NI and SX-Item are not runtime dependencies. See [NOTICE](NOTICE.md) for origins and licenses.
 
+ItemBridge's input JAR is pinned by SHA-256. The build removes its NI/SX provider classes and
+compiles the attributed discovery customization in `vendor/itembridge`. Its other providers
+and core remain from the MIT-licensed artifact. Review the input hash, provider inventory and
+discovery API together before updating this dependency; the artifact audit rejects removed
+adapters and direct NI/SX type references.
+
+The production Java review inventory is under `provenance/`. After reviewing a
+source change, update its decision and LF-normalized hash. Run
+`python -B tools/verify_source_review.py`; release preparation requires this check.
+It verifies review coverage and hashes, not authorship or legal originality.
+
 Do not add server plugin binaries or paid integration JARs to the repository. Optional
 runtime integrations must be installed separately in a test server that you control.
 

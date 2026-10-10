@@ -180,6 +180,13 @@ final class TriggerSource {
         return snapshot == null ? null : snapshot.clone();
     }
 
+    /** Legal component edits retain ownership; moving or replacing the physical stack does not. */
+    boolean ownsCommitted(ItemStack committed) {
+        if (!player.isOnline() || !valid.getAsBoolean()) return false;
+        ItemStack current = read.get();
+        return empty(committed) ? empty(current) : reference(current) == reference(committed);
+    }
+
     ItemStack commit(ItemStack candidate) {
         // Inventory/cursor mirrors are also held by the vanilla event caller. Retain that
         // NMS identity when possible so its later durability/use logic sees the committed value.
