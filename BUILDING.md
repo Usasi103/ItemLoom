@@ -64,8 +64,10 @@ artifacts by SHA-256 and records their official source URLs. `shadowJar` verifie
 that exact set before packaging. Version-matched complete legal texts from
 `licenses/` are included in the JAR and checked by content hash. ItemBridge has
 its separate original-input check. Review source and license changes together
-when updating dependencies; the exact-source gap for Sparrow's embedded
-SnakeYAML fork is explicitly recorded, not replaced by a stock-source claim.
+when updating dependencies. Sparrow's embedded SnakeYAML fork has pinned matching
+[source and a reproducible class comparison](provenance/snakeyaml-fork.md). Run
+`tools/verify_fork_source.py` as documented there when verifying this origin or
+changing the fork/packaging inputs; stock Engine 3.1 is not interchangeable.
 
 The legacy material table is generated from the target Paper API. See
 [its observation record](provenance/legacy-materials.md) for regeneration and

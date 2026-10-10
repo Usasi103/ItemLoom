@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2.3.0",
+  "version": "2.4.0",
   "review_date": "2026-10-10",
   "baseline_commit": "d5fc26d243dbfeb8517218c9b5b319d982c45cb0",
   "baseline_project_files_reviewed": 137,
@@ -9,7 +9,7 @@
     "Retention is an engineering review decision, not proof of historical independent authorship.",
     "Contracts and permitted API surfaces were supplied to fresh implementation workers; coordinator had source exposure.",
     "No legal clean-room certification; GPL, upstream attribution and public history remain.",
-    "Exact dependency binary inputs are reviewed separately; tests/fixtures are not certified as independently authored. Exact modified source for the embedded SnakeYAML fork has not been located."
+    "Exact dependency binaries and matching SnakeYAML fork sources are pinned separately. Tests/fixtures are not certified as independently authored; bytecode correspondence does not certify legal ownership or erase historical source exposure."
   ],
   "files": {
     "compat-ni/src/main/java/dev/itemloom/compat/ni/NiArithmetic.java": {
@@ -939,8 +939,8 @@
     }
   },
   "incremental_review": {
-    "baseline_commit": "88e34fd66ccbc3a8d3975c94ce507bf50f706b49",
-    "scope": "Legacy material resolver, observed platform mapping, dependency license and build/resource distribution boundaries; previous Java decisions retained for unchanged files."
+    "baseline_commit": "e307a2195d76982281af0e018e7d83787ae779f5",
+    "scope": "Exact embedded SnakeYAML source correspondence, compiler/relocation comparison tooling, full source-header attribution and current documentation. All runtime Java and dependency binaries unchanged."
   },
   "support_files": {
     "LICENSE": {
@@ -950,8 +950,8 @@
     },
     "NOTICE.md": {
       "classification": "attributed-legal-text",
-      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
-      "sha256_lf": "3e90ef8443e19a2a1b521cd2a483010f54b7c84e445819949f7c83927388946b"
+      "reason": "Close located SnakeYAML source gap with precise revision and verification boundary; preserve NI/SX history, GPL and third-party attribution.",
+      "sha256_lf": "c581aad5eac0834a3fb90c729f19c4eea9b7fcf30ccc2fc7b3ae2a0e8fcb5f3d"
     },
     "build.gradle.kts": {
       "classification": "reviewed-build-input",
@@ -975,8 +975,8 @@
     },
     "gradle.properties": {
       "classification": "reviewed-build-input",
-      "reason": "Current Java/Paper build, dependencies, source boundaries, version and package rules; required to reproduce the reviewed distribution.",
-      "sha256_lf": "12df6119de87098a83200d79d77d18c2597ae94e601ee6f13550df8a6129e369"
+      "reason": "Formal 2.4.0 release version; Java/runtime settings unchanged.",
+      "sha256_lf": "edcc47f52807abf262a224fdc5647a09c19b1a9dd5d7eddd8ec3dfe6197e682e"
     },
     "gradle/wrapper/gradle-wrapper.jar": {
       "classification": "retained-build-bootstrap",
@@ -1010,8 +1010,8 @@
     },
     "licenses/dependency-origins.md": {
       "classification": "attributed-legal-text",
-      "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
-      "sha256_lf": "dda6a86ad23ff9ef0f21cbb5038b05976a004fa67741aa7b417e24bf76a3f4c8"
+      "reason": "Replace previous unlocated-source statement with rebuilt fork source and complete source-header credits; keep other dependency origins.",
+      "sha256_lf": "5519893ab0efd70699bb419fbab9d36f569575a71048861ec19798d1bebcf7d7"
     },
     "licenses/keystone-GPL-3.0.txt": {
       "classification": "attributed-legal-text",
@@ -1048,6 +1048,11 @@
       "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
       "sha256_lf": "42af97be383c0d60d0104b6385fad7525280eeae3b63a6be34f494f9a5e9b21b"
     },
+    "licenses/snakeyaml-fork-NOTICE.txt": {
+      "classification": "attributed-legal-text",
+      "reason": "New disclosure of SnakeYAML/Google GData source copyright headers and Catnies fork origin; explicitly ItemLoom-authored notice, not a claimed upstream NOTICE.",
+      "sha256_lf": "aabda6a38dee64c89405f67f18a370adda6e34eb018f6ed51e47910318b2db39"
+    },
     "licenses/sparrow-ExtendedConstructor-NOTICE.txt": {
       "classification": "attributed-legal-text",
       "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
@@ -1080,8 +1085,13 @@
     },
     "provenance/runtime-dependencies.json": {
       "classification": "reviewed-dependency-record",
-      "reason": "Explicit dependency source origin, pinned inputs, modifications or legal mapping retained for disclosure and drift checks.",
-      "sha256_lf": "0d91658e25a97480f6b9ae49c9f83ad886676a61d533481f2e173cb5f13cb16a"
+      "reason": "Keep exact runtime binaries; pin matching fork source archive/revision/counts and new complete attribution resource hash.",
+      "sha256_lf": "d5e669ee4130942a80ac7efa1249b6042f838ebebd5ccc63c6f84fd237ed06f1"
+    },
+    "provenance/snakeyaml-fork.md": {
+      "classification": "reviewed-dependency-record",
+      "reason": "Reproducible source/compiler/original/packaged bytecode correspondence with explicit normalization, module and ownership limits.",
+      "sha256_lf": "3472a78f0a7b19df9afeac0f2a56f37af37f542bbb144cce18d5bce7f8015159"
     },
     "settings.gradle.kts": {
       "classification": "reviewed-build-input",
@@ -1092,6 +1102,11 @@
       "classification": "reviewed-release-tool",
       "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
       "sha256_lf": "a572739d5b5dbff2e1ea37000765b64800f3295a36a70dff5233ce74245126ca"
+    },
+    "tools/VerifyForkClasses.java": {
+      "classification": "reviewed-release-tool",
+      "reason": "Exact runtime class sets and normalized structural comparison preserving MethodParameters; reject code/parameter changes, missing/duplicate/multi-release classes and module descriptors.",
+      "sha256_lf": "778239751bd6783837162388da907a6f47d5be100bf4c802c01b84add1f4f609"
     },
     "tools/inventory.py": {
       "classification": "reviewed-release-tool",
@@ -1108,10 +1123,15 @@
       "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
       "sha256_lf": "4f57f65663d6a9fe1bc41391b7be9b5a0ea32db8f0d6c88d4a58c152ba79744a"
     },
+    "tools/verify_fork_source.py": {
+      "classification": "reviewed-release-tool",
+      "reason": "Hash-gated source extraction and JDK25 rebuild; fresh external work directory and failed-run invalidation. No runtime plugin dependency or server writes.",
+      "sha256_lf": "559eded89ac441c100d5c2fb5e56d3d2f92b0991fa1c00144e970d3a889e3b30"
+    },
     "tools/verify_source_review.py": {
       "classification": "reviewed-release-tool",
-      "reason": "Project build/release inspection or standalone packaged-engine validation; retained to detect source, artifact, license or behavior drift, not included in runtime JAR.",
-      "sha256_lf": "ae1b6c51772a09e7c830703e55fab67a8373b4681ee41860868c10adf901e781"
+      "reason": "Extend existing drift coverage to the maintained fork-source correspondence record.",
+      "sha256_lf": "39036886880d1bf4d0f29b875aa10966e75ba2859ca40bda90ae3b6c37364983"
     },
     "vendor/itembridge/LICENSE": {
       "classification": "attributed-legal-text",

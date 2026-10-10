@@ -22,7 +22,7 @@ def support_inputs() -> dict[str, Path]:
                      if path.is_file() and "__pycache__" not in path.parts)
     for name in ("build.gradle.kts", "settings.gradle.kts", "gradle.properties",
                  "gradlew", "gradlew.bat", "LICENSE", "NOTICE.md",
-                 "provenance/runtime-dependencies.json",
+                 "provenance/runtime-dependencies.json", "provenance/snakeyaml-fork.md",
                  "vendor/keystone/LICENSE", "vendor/keystone/README.md", "vendor/keystone/upstream.json",
                  "vendor/itembridge/README.md", "vendor/itembridge/LICENSE"):
         paths.add(PROJECT / name)

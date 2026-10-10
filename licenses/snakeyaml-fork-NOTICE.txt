@@ -1,0 +1,18 @@
+SnakeYAML Engine 3.1-SNAPSHOT-forked
+
+Copyright (c) 2018, SnakeYAML
+
+The bundled Google GData Escaper, PercentEscaper and UnicodeEscaper sources:
+Copyright (c) 2008 Google Inc.
+
+Licensed under the Apache License, Version 2.0. The complete license is
+provided in Apache-2.0.txt in this directory.
+
+Fork modifications by Catnies (raw scalar text and comment preservation):
+https://github.com/Catnies/snakeyaml-engine/tree/30e9499fcd6e1569b81518db13e12d900c5da2eb
+
+Included via Sparrow YAML 1.0.22, then relocated into ItemLoom's private
+namespace. ItemLoom does not modify the fork's runtime implementation.
+The fork source archive contains no separate upstream NOTICE file; this
+disclosure records the source headers and modification origin identified
+by ItemLoom's audit. It is not an upstream-authored NOTICE.

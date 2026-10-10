@@ -57,7 +57,14 @@
     "sha256_before_upstream_shading": "cdfe1aa1a3f872a322f379e396cf649a8d756f2d39599607d1fda408487ac06d",
     "binary_url": "https://github.com/Xiao-MoMi/sparrow-yaml/blob/e325884f1e92dc4a86b35cdbc90bf0183458a7a6/libs/snakeyaml-engine-3.1-SNAPSHOT-forked.jar",
     "declared_license": "Apache-2.0",
-    "source_limit": "Exact modified source and separate fork NOTICE not located; stock sources are not asserted equivalent."
+    "source_commit": "30e9499fcd6e1569b81518db13e12d900c5da2eb",
+    "source_url": "https://github.com/Catnies/snakeyaml-engine/tree/30e9499fcd6e1569b81518db13e12d900c5da2eb",
+    "source_archive_url": "https://codeload.github.com/Catnies/snakeyaml-engine/zip/30e9499fcd6e1569b81518db13e12d900c5da2eb",
+    "source_archive_sha256": "695b9ad44e1188b53db4fee2ff8cb99821abac0e32ba75a2e5d6ddeb16e15b7c",
+    "main_java_files": 136,
+    "runtime_classes": 223,
+    "source_verification": "JDK 25 rebuild; all 223 runtime classes match original and packaged bytecode after removing debug metadata and reversing relocation. module-info.class is excluded from ItemLoom.",
+    "notice_status": "Source archive has no separate upstream NOTICE; ItemLoom supplies source copyright headers and fork attribution in snakeyaml-fork-NOTICE.txt."
   },
   "packaged_notices": {
     "META-INF/licenses/Apache-2.0.txt": {
@@ -70,7 +77,7 @@
     },
     "META-INF/licenses/dependency-origins.md": {
       "source": "licenses/dependency-origins.md",
-      "sha256_lf": "dda6a86ad23ff9ef0f21cbb5038b05976a004fa67741aa7b417e24bf76a3f4c8"
+      "sha256_lf": "5519893ab0efd70699bb419fbab9d36f569575a71048861ec19798d1bebcf7d7"
     },
     "META-INF/licenses/keystone-GPL-3.0.txt": {
       "source": "licenses/keystone-GPL-3.0.txt",
@@ -107,6 +114,10 @@
     "META-INF/licenses/sparrow-GPL-3.0.txt": {
       "source": "licenses/sparrow-GPL-3.0.txt",
       "sha256_lf": "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad"
+    },
+    "META-INF/licenses/snakeyaml-fork-NOTICE.txt": {
+      "source": "licenses/snakeyaml-fork-NOTICE.txt",
+      "sha256_lf": "aabda6a38dee64c89405f67f18a370adda6e34eb018f6ed51e47910318b2db39"
     }
   }
 }

@@ -22,11 +22,14 @@ contains that manifest under `provenance/`.
 - Sparrow embeds SnakeYAML Engine `3.1-SNAPSHOT-forked`, identified as Apache-2.0
   by its embedded POM and manifest. The exact upstream-provided fork binary has
   SHA-256 `cdfe1aa1a3f872a322f379e396cf649a8d756f2d39599607d1fda408487ac06d`
-  and is present in Sparrow's official source tree under `libs/`. This identifies
-  the actual fork binary; matching modified source and a separate fork NOTICE
-  have not been located. A stock SnakeYAML source archive is not represented as
-  the corresponding fork source. The complete Apache-2.0 license identified by
-  that binary is supplied. This source-disclosure limit remains open.
+  and is present in Sparrow's official source tree under `libs/`. Its matching
+  source is Catnies/snakeyaml-engine commit
+  `30e9499fcd6e1569b81518db13e12d900c5da2eb`. A JDK 25 rebuild matches all
+  223 runtime classes after removing debug metadata; the packaged classes match
+  after reversing relocation. The dependency manifest pins the source archive
+  and records the verification boundary. The source has no separate upstream
+  NOTICE. `snakeyaml-fork-NOTICE.txt` records the SnakeYAML/Google source headers
+  and Catnies modification origin; the complete Apache-2.0 license is included.
 
 ItemBridge and Keystone have separate notices in this directory. These records
 document included dependencies and packaging changes; they are not an authorship

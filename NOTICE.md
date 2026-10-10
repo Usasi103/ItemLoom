@@ -60,8 +60,12 @@ not establish a new historical independent-authorship claim.
   Its exact source commit is `e325884f1e92dc4a86b35cdbc90bf0183458a7a6`. It includes Apache-2.0
   `ExtendedConstructor` code (copyright 2024 dejvokep) and an Apache-2.0 SnakeYAML Engine
   `3.1-SNAPSHOT-forked` binary. The exact fork binary is identified in
-  [the dependency manifest](provenance/runtime-dependencies.json); matching modified source and a
-  separate fork NOTICE have not been located. Stock SnakeYAML sources are not asserted equivalent.
+  [the dependency manifest](provenance/runtime-dependencies.json). Its matching source is
+  [Catnies/snakeyaml-engine, 30e9499](https://github.com/Catnies/snakeyaml-engine/tree/30e9499fcd6e1569b81518db13e12d900c5da2eb).
+  All 223 runtime classes match a source rebuild and the relocated plugin after debug/namespace
+  normalization; see [verification and limits](provenance/snakeyaml-fork.md). SnakeYAML (2018),
+  Google GData (2008 Google Inc.) and Catnies fork modifications are credited in the packaged
+  notice. The source archive has no separate upstream NOTICE. Stock 3.1 is not substituted.
 - **OpenJDK Nashorn 15.4** (GPL-2.0 with Classpath exception) and its **ASM 7.3.1** dependencies
   (BSD-3-Clause): embedded for JavaScript support. Nashorn includes Joni and double-conversion
   components with their own notices. Complete version-matched license/notice texts are under

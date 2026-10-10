@@ -54,9 +54,11 @@ Nashorn, ASM and Sparrow YAML remain disclosed runtime libraries. See [NOTICE](.
 
 Fixtures and tests are reviewed by responsibility and public-content checks; the
 inventory does not certify every test as independently authored. Included
-dependency binaries are pinned separately. The exact modified source for
-Sparrow's embedded SnakeYAML fork has not been located; that limitation remains
-explicit in the dependency records. The artifact check separately rejects NI/SX plugin
+dependency binaries are pinned separately. The 2.4.0 audit locates and rebuilds
+Sparrow's exact embedded SnakeYAML fork: all 223 runtime classes match the
+original and relocated plugin after debug/namespace normalization. The
+[source record](snakeyaml-fork.md) provides pinned inputs, a reproduction tool,
+license/header disclosures and comparison limits. The artifact check rejects NI/SX plugin
 classes, direct JVM type links, excluded providers and obsolete helper resources.
 
 The comparisons include the available NI Kotlin sources, the maintained Java
