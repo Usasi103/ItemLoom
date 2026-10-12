@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2.6.0",
+  "version": "2.6.1",
   "review_date": "2026-10-12",
   "baseline_commit": "03f5da3945c22f6ae9aa504abd7b8365bbbea06c",
   "baseline_project_files_reviewed": 152,
@@ -1126,8 +1126,8 @@
     },
     "gradle.properties": {
       "classification": "reviewed-build-resource-or-audit-input",
-      "reason": "Select the new formal 2.6.0 release without changing the reviewed toolchain or runtime dependencies.",
-      "sha256_lf": "13ced96a9d37d45e81d599173bc38dc9c7a9ad58c736ad370d5a3f18e78c2cd0"
+      "reason": "Select the formal 2.6.1 documentation release without changing the reviewed toolchain or runtime dependencies.",
+      "sha256_lf": "aa00133cb6e00b012e73d8c38533caad4cc848be43e5620ebd8fb101b2a55a4c"
     },
     "gradle/wrapper/gradle-wrapper.jar": {
       "classification": "retained-build-bootstrap",
