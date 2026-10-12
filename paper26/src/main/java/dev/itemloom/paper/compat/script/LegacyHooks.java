@@ -1,16 +1,19 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.function.BiFunction;
 import dev.itemloom.compat.ni.action.NiActionText;
 import dev.itemloom.paper.integration.OptionalItemIntegrations;
+import dev.itemloom.paper.integration.OptionalItemSources;
+import java.util.Objects;
+import java.util.function.BiFunction;
+import org.bukkit.ChatColor;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.inventory.ItemStack;
 
-/** The small hook surface used by NI's bundled action functions. */
 public final class LegacyHooks {
     public final LegacyHooks INSTANCE = this;
     private final BiFunction<Object, String, String> placeholders;
     private final OptionalItemIntegrations integrations;
-    private final dev.itemloom.paper.integration.OptionalItemSources itemSources;
+    private final OptionalItemSources itemSources;
 
     public LegacyHooks(BiFunction<Object, String, String> placeholders) {
         this(placeholders, new OptionalItemIntegrations());
@@ -19,30 +22,31 @@ public final class LegacyHooks {
     public LegacyHooks(
             BiFunction<Object, String, String> placeholders,
             OptionalItemIntegrations integrations) {
-        this(placeholders, integrations, new dev.itemloom.paper.integration.OptionalItemSources());
+        this(placeholders, integrations, new OptionalItemSources());
     }
 
     public LegacyHooks(
             BiFunction<Object, String, String> placeholders,
             OptionalItemIntegrations integrations,
-            dev.itemloom.paper.integration.OptionalItemSources itemSources) {
-        this.placeholders = java.util.Objects.requireNonNull(placeholders);
-        this.integrations = java.util.Objects.requireNonNull(integrations);
-        this.itemSources = java.util.Objects.requireNonNull(itemSources);
+            OptionalItemSources itemSources) {
+        this.placeholders = Objects.requireNonNull(placeholders, "placeholders");
+        this.integrations = Objects.requireNonNull(integrations, "integrations");
+        this.itemSources = Objects.requireNonNull(itemSources, "itemSources");
     }
 
-    public org.bukkit.inventory.ItemStack getHookedItem(String id) {
+    public ItemStack getHookedItem(String id) {
         return itemSources.getHookedItem(id);
     }
 
     public String papi(OfflinePlayer player, String text) {
-        if (text == null) return null;
-        // Use the same percent scanner as the action frontend; plain angle brackets remain literal.
-        return NiActionText.replacePlaceholders(text, token -> placeholders.apply(player, token));
+        return text == null
+                ? null
+                : NiActionText.replacePlaceholders(
+                        text, token -> placeholders.apply(player, token));
     }
 
     public String papiColor(OfflinePlayer player, String text) {
-        return papi(player, org.bukkit.ChatColor.translateAlternateColorCodes('&', text));
+        return papi(player, ChatColor.translateAlternateColorCodes('&', text));
     }
 
     public OptionalItemIntegrations.Mythic getMythicMobsHooker() {

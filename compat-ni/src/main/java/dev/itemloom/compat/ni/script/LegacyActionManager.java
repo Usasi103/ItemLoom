@@ -1,15 +1,11 @@
 package dev.itemloom.compat.ni.script;
 
-import java.util.Collection;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
-import dev.itemloom.compat.ni.action.NiActionContext;
-import dev.itemloom.compat.ni.action.NiActions;
+import dev.itemloom.compat.ni.action.*;
 import dev.itemloom.core.ActionFlow;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.*;
 
-/** Script-facing manager contract. Scheduling and side effects remain owned by the new runtime. */
 public final class LegacyActionManager {
     private final NiActions compiler;
     private final BiFunction<
@@ -33,7 +29,7 @@ public final class LegacyActionManager {
         private final ActionFlow.Step<NiActionContext> step;
 
         private Action(ActionFlow.Step<NiActionContext> step) {
-            this.step = step;
+            this.step = Objects.requireNonNull(step);
         }
 
         public CompletableFuture<LegacyActionResult> eval(NiActionContext context) {
@@ -52,11 +48,11 @@ public final class LegacyActionManager {
     }
 
     public Action wrap(ActionFlow.Step<NiActionContext> step) {
-        return new Action(java.util.Objects.requireNonNull(step));
+        return new Action(step);
     }
 
     public Action compile(Object source) {
-        return source instanceof Action action ? action : new Action(compiler.compile(source));
+        return source instanceof Action action ? action : wrap(compiler.compile(source));
     }
 
     public Action compile(Object source, Object fallback) {
@@ -69,7 +65,7 @@ public final class LegacyActionManager {
     }
 
     public CompletableFuture<LegacyActionResult> runActionWithResult(Action action) {
-        return action.eval(NiActionContext.empty());
+        return runActionWithResult(action, NiActionContext.empty());
     }
 
     public LegacyActionResult runAction(Action action, NiActionContext context) {
@@ -103,9 +99,9 @@ public final class LegacyActionManager {
             compiler.register(
                     id,
                     asyncSafe,
-                    (context, text) -> {
-                        handler.accept(context, text);
-                        return null;
+                    (context, value) -> {
+                        handler.accept(context, value);
+                        return ActionFlow.Result.CONTINUE;
                     });
     }
 
@@ -117,7 +113,7 @@ public final class LegacyActionManager {
             Collection<String> ids,
             boolean asyncSafe,
             BiConsumer<NiActionContext, String> handler) {
-        ids.forEach(id -> addConsumer(id, asyncSafe, handler));
+        for (String id : ids) addConsumer(id, asyncSafe, handler);
     }
 
     public void addFunction(String id, BiFunction<NiActionContext, String, ?> handler) {
@@ -138,6 +134,6 @@ public final class LegacyActionManager {
             Collection<String> ids,
             boolean asyncSafe,
             BiFunction<NiActionContext, String, ?> handler) {
-        ids.forEach(id -> addFunction(id, asyncSafe, handler));
+        for (String id : ids) addFunction(id, asyncSafe, handler);
     }
 }

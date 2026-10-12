@@ -1,9 +1,7 @@
 package dev.itemloom.compat.ni.script;
 
+import dev.itemloom.compat.ni.*;
 import java.util.Map;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiYaml;
 import org.bukkit.configuration.ConfigurationSection;
 
 public final class LegacySection {
@@ -37,9 +35,7 @@ public final class LegacySection {
                         .legacyContext(
                                 cache,
                                 player,
-                                sections == null
-                                        ? new NiConfig(Map.of())
-                                        : NiYaml.fromSection(sections));
+                                sections == null ? null : NiYaml.fromSection(sections));
         try {
             return evaluation.configured(NiYaml.fromSection(data));
         } finally {
@@ -51,9 +47,9 @@ public final class LegacySection {
     }
 
     public String load(Map<String, String> cache, Object player, ConfigurationSection sections) {
-        String value = get(cache, player, sections);
-        if (value != null && cache != null) cache.put(id, value);
-        return value;
+        String result = get(cache, player, sections);
+        if (cache != null && result != null) cache.put(id, result);
+        return result;
     }
 
     public String get() {

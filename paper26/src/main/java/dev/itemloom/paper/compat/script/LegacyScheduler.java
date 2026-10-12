@@ -1,5 +1,9 @@
 package dev.itemloom.paper.compat.script;
 
+import dev.itemloom.compat.ni.NiEvaluation;
+import dev.itemloom.compat.ni.NiScripts;
+import dev.itemloom.compat.ni.action.NiActionContext;
+import dev.itemloom.paper.action.ActionTasks;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
@@ -16,24 +20,20 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiScripts;
-import dev.itemloom.compat.ni.action.NiActionContext;
-import dev.itemloom.paper.action.ActionTasks;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/** Script-only SchedulerUtils adapter; all work remains owned by its catalog revision. */
+/** Revision-owned scheduling preserves the exact captured action and evaluation for every callback. */
 public final class LegacyScheduler {
     private final JavaPlugin plugin;
     private final ActionTasks tasks;
     private final NiScripts scripts;
 
     public LegacyScheduler(JavaPlugin plugin, ActionTasks tasks, NiScripts scripts) {
-        this.plugin = Objects.requireNonNull(plugin);
-        this.tasks = Objects.requireNonNull(tasks);
-        this.scripts = Objects.requireNonNull(scripts);
+        this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.tasks = Objects.requireNonNull(tasks, "tasks");
+        this.scripts = Objects.requireNonNull(scripts, "scripts");
     }
 
     public void run(boolean inPrimaryThread, Runnable task) {
@@ -50,7 +50,7 @@ public final class LegacyScheduler {
     }
 
     public void sync(Plugin owner, Runnable task) {
-        dispatch(owner, 0, false, true, task);
+        submit(owner, 0, false, true, task);
     }
 
     public void async(Runnable task) {
@@ -58,7 +58,7 @@ public final class LegacyScheduler {
     }
 
     public void async(Plugin owner, Runnable task) {
-        dispatch(owner, 0, true, false, task);
+        submit(owner, 0, true, false, task);
     }
 
     public void syncLater(long delay, Runnable task) {
@@ -66,7 +66,7 @@ public final class LegacyScheduler {
     }
 
     public void syncLater(Plugin owner, long delay, Runnable task) {
-        dispatch(owner, delay, false, false, task);
+        submit(owner, delay, false, false, task);
     }
 
     public void asyncLater(long delay, Runnable task) {
@@ -74,7 +74,7 @@ public final class LegacyScheduler {
     }
 
     public void asyncLater(Plugin owner, long delay, Runnable task) {
-        dispatch(owner, delay, true, false, task);
+        submit(owner, delay, true, false, task);
     }
 
     public void syncTimer(long delay, long period, Runnable task) {
@@ -82,7 +82,7 @@ public final class LegacyScheduler {
     }
 
     public void syncTimer(Plugin owner, long delay, long period, Runnable task) {
-        repeat(owner, delay, period, false, task);
+        timer(owner, delay, period, false, task);
     }
 
     public void asyncTimer(long delay, long period, Runnable task) {
@@ -90,7 +90,7 @@ public final class LegacyScheduler {
     }
 
     public void asyncTimer(Plugin owner, long delay, long period, Runnable task) {
-        repeat(owner, delay, period, true, task);
+        timer(owner, delay, period, true, task);
     }
 
     public void runLater(long delay, Runnable task) {
@@ -98,7 +98,7 @@ public final class LegacyScheduler {
     }
 
     public void runLater(Plugin owner, long delay, Runnable task) {
-        dispatch(owner, delay, !Bukkit.isPrimaryThread(), false, task);
+        submit(owner, delay, !Bukkit.isPrimaryThread(), false, task);
     }
 
     public <T> T syncAndGet(Callable<T> task) {
@@ -106,23 +106,21 @@ public final class LegacyScheduler {
     }
 
     public <T> T syncAndGet(Plugin owner, Callable<T> task) {
-        Objects.requireNonNull(owner);
-        Objects.requireNonNull(task);
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(task, "task");
         if (!tasks.active() || !owner.isEnabled()) return null;
-        // The main-thread callback needs this same monitor. Waiting while holding it would
-        // deadlock both the script and the server; migrate this call to sync/callSyncMethod.
-        if (!Bukkit.isPrimaryThread() && Thread.holdsLock(scripts))
+        if (!Bukkit.isPrimaryThread() && Thread.holdsLock(scripts)) {
             throw new IllegalStateException(
-                    "SchedulerUtils.syncAndGet cannot wait from a running asynchronous script; use sync or callSyncMethod with a continuation");
+                    "Cannot wait for the main thread while holding the script lock; use sync or a callSyncMethod continuation");
+        }
         try {
             return callSyncMethod(owner, task).get();
-        } catch (InterruptedException error) {
+        } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
-            warning(error);
-        } catch (ExecutionException error) {
-            warning(error.getCause());
+            warning(failure);
+        } catch (ExecutionException failure) {
+            warning(unwrap(failure));
         } catch (CancellationException ignored) {
-            /* Closing a revision must wake waiting callers. */
         }
         return null;
     }
@@ -132,19 +130,74 @@ public final class LegacyScheduler {
     }
 
     public <T> CompletableFuture<T> callSyncMethod(Plugin owner, Callable<T> task) {
-        return callSync(owner, task, true);
+        return valueCall(owner, task, false);
     }
 
-    /** Internal side-effect adapter: preserve an uncertain failure instead of reporting a null success. */
     public <T> CompletableFuture<T> callSyncStrict(Callable<T> task) {
-        return callSync(plugin, task, false);
+        return valueCall(plugin, task, true);
     }
 
-    private <T> CompletableFuture<T> callSync(
-            Plugin owner, Callable<T> task, boolean tolerateFailure) {
-        Objects.requireNonNull(task);
-        Callback context = capture(owner);
-        GuardedFuture<T> result = new GuardedFuture<>(context);
+    private void submit(Plugin owner, long delay, boolean async, boolean immediate, Runnable task) {
+        Objects.requireNonNull(task, "task");
+        Captured scope = capture(owner);
+        CompletableFuture<Void> future =
+                tasks.call(
+                        delay,
+                        async,
+                        immediate,
+                        owner::isEnabled,
+                        () ->
+                                scope.invoke(
+                                        false,
+                                        () -> {
+                                            task.run();
+                                            return null;
+                                        }));
+        if (immediate && delay <= 0 && Bukkit.isPrimaryThread() != async) {
+            if (!future.isCancelled()) {
+                try {
+                    future.join();
+                } catch (CompletionException failure) {
+                    throw unchecked(unwrap(failure));
+                }
+            }
+        } else {
+            future.whenComplete(
+                    (value, failure) -> {
+                        if (failure != null && !(unwrap(failure) instanceof CancellationException))
+                            warning(unwrap(failure));
+                    });
+        }
+    }
+
+    private void timer(Plugin owner, long delay, long period, boolean async, Runnable task) {
+        Objects.requireNonNull(task, "task");
+        Captured scope = capture(owner);
+        tasks.repeat(
+                delay,
+                period,
+                async,
+                owner::isEnabled,
+                () -> {
+                    try {
+                        scope.invoke(
+                                false,
+                                () -> {
+                                    task.run();
+                                    return null;
+                                });
+                    } catch (CancellationException cancelled) {
+                        throw cancelled;
+                    } catch (Throwable failure) {
+                        warning(unwrap(failure));
+                    }
+                });
+    }
+
+    private <T> CompletableFuture<T> valueCall(Plugin owner, Callable<T> task, boolean strict) {
+        Objects.requireNonNull(task, "task");
+        Captured scope = capture(owner);
+        GuardedFuture<T> result = new GuardedFuture<>(scope);
         CompletableFuture<T> scheduled =
                 tasks.call(
                         0,
@@ -152,98 +205,31 @@ public final class LegacyScheduler {
                         true,
                         owner::isEnabled,
                         () ->
-                                context.invoke(
+                                scope.invoke(
+                                        false,
                                         () -> {
                                             try {
                                                 return task.call();
-                                            } catch (Exception error) {
-                                                if (!tolerateFailure)
-                                                    throw new CompletionException(error);
-                                                warning(error);
+                                            } catch (Exception failure) {
+                                                if (strict) throw new CompletionException(failure);
+                                                warning(failure);
                                                 return null;
                                             }
                                         }));
+        result.scheduled = scheduled;
+        if (result.isCancelled()) scheduled.cancel(false);
         scheduled.whenComplete(
-                (value, error) -> {
-                    if (scheduled.isCancelled()) result.cancel(false);
-                    else if (error == null) result.complete(value);
-                    else result.completeExceptionally(error);
+                (value, failure) -> {
+                    Throwable cause = unwrap(failure);
+                    if (cause instanceof CancellationException) result.cancel(false);
+                    else if (cause != null) result.completeExceptionally(cause);
+                    else result.complete(value);
                 });
-        CompletableFuture.allOf(result)
-                .whenComplete(
-                        (value, error) -> {
-                            if (result.isCancelled()) scheduled.cancel(false);
-                        });
         return result;
     }
 
-    private void dispatch(
-            Plugin owner, long delay, boolean async, boolean immediate, Runnable task) {
-        Objects.requireNonNull(task);
-        Callback context = capture(owner);
-        CompletableFuture<Void> scheduled =
-                tasks.call(
-                        delay,
-                        async,
-                        immediate,
-                        owner::isEnabled,
-                        () ->
-                                context.invoke(
-                                        () -> {
-                                            task.run();
-                                            return null;
-                                        }));
-        if (immediate && Bukkit.isPrimaryThread()) {
-            // Preserve immediate sync() exceptions; scheduled callbacks report to the logger.
-            if (!scheduled.isCancelled()) {
-                try {
-                    scheduled.join();
-                } catch (CompletionException error) {
-                    if (error.getCause() instanceof RuntimeException cause) throw cause;
-                    if (error.getCause() instanceof Error cause) throw cause;
-                    throw error;
-                }
-            }
-        } else
-            scheduled.whenComplete(
-                    (value, error) -> {
-                        if (error != null && !scheduled.isCancelled()) warning(error);
-                    });
-    }
-
-    private void repeat(Plugin owner, long delay, long period, boolean async, Runnable task) {
-        Objects.requireNonNull(task);
-        Callback context = capture(owner);
-        CompletableFuture<Void> lifetime =
-                tasks.repeat(
-                        delay,
-                        period,
-                        async,
-                        owner::isEnabled,
-                        () -> {
-                            try {
-                                context.invoke(
-                                        () -> {
-                                            task.run();
-                                            return null;
-                                        });
-                            } catch (CancellationException stopped) {
-                                throw stopped;
-                            }
-                            // Bukkit keeps a timer registered after a failing invocation; retain
-                            // that behavior.
-                            catch (Throwable error) {
-                                warning(error);
-                            }
-                        });
-        lifetime.whenComplete(
-                (value, error) -> {
-                    if (error != null && !lifetime.isCancelled()) warning(error);
-                });
-    }
-
-    private Callback capture(Plugin owner) {
-        Objects.requireNonNull(owner);
+    private Captured capture(Plugin owner) {
+        Objects.requireNonNull(owner, "owner");
         NiActionContext action = NiActionContext.currentOrNull();
         NiEvaluation evaluation;
         try {
@@ -251,306 +237,355 @@ public final class LegacyScheduler {
         } catch (IllegalStateException absent) {
             evaluation = null;
         }
-        if ((evaluation != null && evaluation.scripts() != scripts)
-                || (action != null && action.evaluation().scripts() != scripts))
+        if (action != null && action.evaluation().scripts() != scripts
+                || evaluation != null && evaluation.scripts() != scripts) {
             throw new IllegalStateException(
                     "SchedulerUtils cannot capture a context from another script revision");
-        return new Callback(owner, action, evaluation);
+        }
+        return new Captured(owner, action, evaluation);
     }
 
-    private final class Callback {
+    private void warning(Throwable failure) {
+        plugin.getLogger().log(Level.WARNING, "Legacy script scheduler callback failed", failure);
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+        while ((failure instanceof CompletionException || failure instanceof ExecutionException)
+                && failure.getCause() != null) failure = failure.getCause();
+        return failure;
+    }
+
+    private static RuntimeException unchecked(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) return runtime;
+        if (failure instanceof Error error) throw error;
+        return new CompletionException(failure);
+    }
+
+    private final class Captured {
         private final Plugin owner;
         private final NiActionContext action;
         private final NiEvaluation evaluation;
 
-        Callback(Plugin owner, NiActionContext action, NiEvaluation evaluation) {
+        private Captured(Plugin owner, NiActionContext action, NiEvaluation evaluation) {
             this.owner = owner;
             this.action = action;
             this.evaluation = evaluation;
         }
 
-        <T> T invoke(Supplier<T> operation) {
+        private <T> T invoke(boolean cancellationCleanup, Supplier<T> operation) {
             synchronized (scripts) {
-                // Recheck after acquiring the engine monitor: reload may have cancelled a
-                // task that was already waiting for the preceding callback to finish.
-                if (!tasks.active()
-                        || !owner.isEnabled()
-                        || !scripts.isOpen()
-                        || (action != null && !action.active()))
-                    throw new CancellationException("Script scheduler revision is closed");
-                return complete(operation);
-            }
-        }
-
-        <T> T complete(Supplier<T> operation) {
-            synchronized (scripts) {
-                // A cancelled future still runs its already registered completion callbacks.
-                // Restore their context before close clears this revision's engines, without
-                // reopening task admission or executing the cancelled callable.
-                Supplier<T> scoped =
-                        evaluation == null ? operation : () -> evaluation.scoped(operation);
-                if (action == null) return scoped.get();
-                boolean previousSync = action.isSync();
-                action.setSync(Bukkit.isPrimaryThread());
-                try {
-                    return action.invoke(scoped);
-                } finally {
-                    action.setSync(previousSync);
+                if (!scripts.isOpen()
+                        || !cancellationCleanup
+                                && (!tasks.active()
+                                        || !owner.isEnabled()
+                                        || action != null && !action.active())) {
+                    throw new CancellationException(
+                            "Script scheduling revision is no longer active");
                 }
+                return enter(operation);
             }
         }
 
-        <T> T observe(Throwable error, Supplier<T> operation) {
+        private <T> T enter(Supplier<T> operation) {
+            Supplier<T> evaluated =
+                    evaluation == null ? operation : () -> evaluation.scoped(operation);
+            if (action == null) return evaluated.get();
+            boolean previousSync = action.isSync();
+            action.setSync(Bukkit.isPrimaryThread());
+            try {
+                return action.invoke(evaluated);
+            } finally {
+                action.setSync(previousSync);
+            }
+        }
+
+        private <T> T settle(Supplier<T> operation) {
             synchronized (scripts) {
-                // Already-registered cancellation observers may clean up while tasks.close
-                // is draining this revision. After scripts.close no user JS is entered.
-                if (!scripts.isOpen())
-                    throw new CancellationException("Script scheduler revision is closed");
-                return cancelled(error) ? complete(operation) : invoke(operation);
+                return scripts.isOpen() ? enter(operation) : operation.get();
             }
         }
 
-        private boolean cancelled(Throwable error) {
-            while ((error instanceof CompletionException || error instanceof ExecutionException)
-                    && error.getCause() != null) error = error.getCause();
-            return error instanceof CancellationException;
-        }
-
-        <T> CompletableFuture<T> track(CompletableFuture<T> future) {
-            return tasks.track(future);
-        }
-
-        boolean holdsScriptLock() {
-            return Thread.holdsLock(scripts);
+        private <T> T observe(Throwable failure, Supplier<T> operation) {
+            return invoke(unwrap(failure) instanceof CancellationException, operation);
         }
     }
 
-    private void warning(Throwable error) {
-        plugin.getLogger().log(Level.WARNING, "Legacy script scheduler callback failed", error);
-    }
+    private final class GuardedFuture<T> extends CompletableFuture<T> {
+        private final Captured scope;
+        private volatile CompletableFuture<?> scheduled;
 
-    /**
-     * Common unary continuation methods retain script scope and revision ownership, including
-     * registration after completion and explicit executors. Binary/either combinators, obtrude,
-     * completeAsync and minimalCompletionStage remain raw Java interop, not script scheduling APIs.
-     */
-    private static final class GuardedFuture<T> extends CompletableFuture<T> {
-        private final Callback context;
-
-        GuardedFuture(Callback context) {
-            this.context = context;
-            context.track(this);
+        private GuardedFuture(Captured scope) {
+            this.scope = scope;
+            tasks.track(this);
         }
 
         @Override
         public <U> CompletableFuture<U> newIncompleteFuture() {
-            return new GuardedFuture<>(context);
+            return new GuardedFuture<>(scope);
         }
 
         @Override
         public boolean complete(T value) {
-            return context.complete(() -> super.complete(value));
+            return scope.settle(() -> super.complete(value));
         }
 
         @Override
-        public boolean completeExceptionally(Throwable error) {
-            return context.complete(() -> super.completeExceptionally(error));
+        public boolean completeExceptionally(Throwable failure) {
+            Objects.requireNonNull(failure, "failure");
+            return scope.settle(() -> super.completeExceptionally(failure));
         }
 
         @Override
-        public boolean cancel(boolean interrupt) {
-            return context.complete(() -> super.cancel(interrupt));
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            boolean changed = scope.settle(() -> super.cancel(mayInterruptIfRunning));
+            CompletableFuture<?> linked = scheduled;
+            if (linked != null && !linked.isDone()) linked.cancel(mayInterruptIfRunning);
+            return changed;
         }
 
-        private <A, R> Function<A, R> scoped(Function<? super A, ? extends R> function) {
-            Objects.requireNonNull(function);
-            return value -> context.invoke(() -> function.apply(value));
-        }
-
-        private Consumer<T> scoped(Consumer<? super T> consumer) {
-            Objects.requireNonNull(consumer);
-            return value ->
-                    context.invoke(
-                            () -> {
-                                consumer.accept(value);
-                                return null;
-                            });
-        }
-
-        private Runnable scoped(Runnable operation) {
-            Objects.requireNonNull(operation);
-            return () ->
-                    context.invoke(
-                            () -> {
-                                operation.run();
-                                return null;
-                            });
-        }
-
-        private BiConsumer<T, Throwable> observer(
-                BiConsumer<? super T, ? super Throwable> observer) {
-            Objects.requireNonNull(observer);
-            return (value, error) ->
-                    context.observe(
-                            error,
-                            () -> {
-                                observer.accept(value, error);
-                                return null;
-                            });
-        }
-
-        private <U> BiFunction<T, Throwable, U> handler(
-                BiFunction<? super T, Throwable, ? extends U> handler) {
-            Objects.requireNonNull(handler);
-            return (value, error) -> context.observe(error, () -> handler.apply(value, error));
-        }
-
-        private Function<Throwable, T> recovery(Function<Throwable, ? extends T> function) {
-            Objects.requireNonNull(function);
-            return error -> context.observe(error, () -> function.apply(error));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenApply(Function<? super T, ? extends U> function) {
-            return super.thenApply(scoped(function));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> function) {
-            return super.thenApplyAsync(scoped(function));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenApplyAsync(
-                Function<? super T, ? extends U> function, Executor executor) {
-            return super.thenApplyAsync(scoped(function), executor);
-        }
-
-        @Override
-        public CompletableFuture<Void> thenAccept(Consumer<? super T> consumer) {
-            return super.thenAccept(scoped(consumer));
-        }
-
-        @Override
-        public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> consumer) {
-            return super.thenAcceptAsync(scoped(consumer));
-        }
-
-        @Override
-        public CompletableFuture<Void> thenAcceptAsync(
-                Consumer<? super T> consumer, Executor executor) {
-            return super.thenAcceptAsync(scoped(consumer), executor);
-        }
-
-        @Override
-        public CompletableFuture<Void> thenRun(Runnable operation) {
-            return super.thenRun(scoped(operation));
-        }
-
-        @Override
-        public CompletableFuture<Void> thenRunAsync(Runnable operation) {
-            return super.thenRunAsync(scoped(operation));
-        }
-
-        @Override
-        public CompletableFuture<Void> thenRunAsync(Runnable operation, Executor executor) {
-            return super.thenRunAsync(scoped(operation), executor);
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenCompose(
-                Function<? super T, ? extends CompletionStage<U>> function) {
-            return super.thenCompose(scoped(function));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenComposeAsync(
-                Function<? super T, ? extends CompletionStage<U>> function) {
-            return super.thenComposeAsync(scoped(function));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> thenComposeAsync(
-                Function<? super T, ? extends CompletionStage<U>> function, Executor executor) {
-            return super.thenComposeAsync(scoped(function), executor);
-        }
-
-        @Override
-        public CompletableFuture<T> whenComplete(
-                BiConsumer<? super T, ? super Throwable> observer) {
-            return super.whenComplete(observer(observer));
-        }
-
-        @Override
-        public CompletableFuture<T> whenCompleteAsync(
-                BiConsumer<? super T, ? super Throwable> observer) {
-            return super.whenCompleteAsync(observer(observer));
-        }
-
-        @Override
-        public CompletableFuture<T> whenCompleteAsync(
-                BiConsumer<? super T, ? super Throwable> observer, Executor executor) {
-            return super.whenCompleteAsync(observer(observer), executor);
-        }
-
-        @Override
-        public <U> CompletableFuture<U> handle(
-                BiFunction<? super T, Throwable, ? extends U> handler) {
-            return super.handle(handler(handler));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> handleAsync(
-                BiFunction<? super T, Throwable, ? extends U> handler) {
-            return super.handleAsync(handler(handler));
-        }
-
-        @Override
-        public <U> CompletableFuture<U> handleAsync(
-                BiFunction<? super T, Throwable, ? extends U> handler, Executor executor) {
-            return super.handleAsync(handler(handler), executor);
-        }
-
-        @Override
-        public CompletableFuture<T> exceptionally(Function<Throwable, ? extends T> function) {
-            return super.exceptionally(recovery(function));
-        }
-
-        @Override
-        public CompletableFuture<T> exceptionallyAsync(Function<Throwable, ? extends T> function) {
-            return super.exceptionallyAsync(recovery(function));
-        }
-
-        @Override
-        public CompletableFuture<T> exceptionallyAsync(
-                Function<Throwable, ? extends T> function, Executor executor) {
-            return super.exceptionallyAsync(recovery(function), executor);
-        }
-
-        private void checkWait() {
-            if (!isDone() && (Bukkit.isPrimaryThread() || context.holdsScriptLock()))
+        private void guardWait() {
+            if (!isDone() && (Bukkit.isPrimaryThread() || Thread.holdsLock(scripts))) {
                 throw new IllegalStateException(
-                        "Cannot wait for an unfinished SchedulerUtils callback on the server thread or while running a script; use a future continuation");
+                        "Cannot wait for an unfinished script future on the main thread or while holding the script lock");
+            }
         }
 
         @Override
         public T join() {
-            checkWait();
+            guardWait();
             return super.join();
         }
 
         @Override
         public T get() throws InterruptedException, ExecutionException {
-            checkWait();
+            guardWait();
             return super.get();
         }
 
         @Override
         public T get(long timeout, TimeUnit unit)
                 throws InterruptedException, ExecutionException, TimeoutException {
-            Objects.requireNonNull(unit);
-            if (timeout > 0) checkWait();
+            Objects.requireNonNull(unit, "unit");
+            if (timeout > 0) guardWait();
             return super.get(timeout, unit);
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenApply(Function<? super T, ? extends U> mapper) {
+            Objects.requireNonNull(mapper, "mapper");
+            return super.thenApply(value -> scope.invoke(false, () -> mapper.apply(value)));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> mapper) {
+            Objects.requireNonNull(mapper, "mapper");
+            return super.thenApplyAsync(value -> scope.invoke(false, () -> mapper.apply(value)));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenApplyAsync(
+                Function<? super T, ? extends U> mapper, Executor executor) {
+            Objects.requireNonNull(mapper, "mapper");
+            return super.thenApplyAsync(
+                    value -> scope.invoke(false, () -> mapper.apply(value)), executor);
+        }
+
+        @Override
+        public CompletableFuture<Void> thenAccept(Consumer<? super T> consumer) {
+            Objects.requireNonNull(consumer, "consumer");
+            return super.thenAccept(
+                    value ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        consumer.accept(value);
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> consumer) {
+            Objects.requireNonNull(consumer, "consumer");
+            return super.thenAcceptAsync(
+                    value ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        consumer.accept(value);
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<Void> thenAcceptAsync(
+                Consumer<? super T> consumer, Executor executor) {
+            Objects.requireNonNull(consumer, "consumer");
+            return super.thenAcceptAsync(
+                    value ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        consumer.accept(value);
+                                        return null;
+                                    }),
+                    executor);
+        }
+
+        @Override
+        public CompletableFuture<Void> thenRun(Runnable operation) {
+            Objects.requireNonNull(operation, "operation");
+            return super.thenRun(
+                    () ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        operation.run();
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<Void> thenRunAsync(Runnable operation) {
+            Objects.requireNonNull(operation, "operation");
+            return super.thenRunAsync(
+                    () ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        operation.run();
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<Void> thenRunAsync(Runnable operation, Executor executor) {
+            Objects.requireNonNull(operation, "operation");
+            return super.thenRunAsync(
+                    () ->
+                            scope.invoke(
+                                    false,
+                                    () -> {
+                                        operation.run();
+                                        return null;
+                                    }),
+                    executor);
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenCompose(
+                Function<? super T, ? extends CompletionStage<U>> composer) {
+            Objects.requireNonNull(composer, "composer");
+            return super.thenCompose(value -> scope.invoke(false, () -> composer.apply(value)));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenComposeAsync(
+                Function<? super T, ? extends CompletionStage<U>> composer) {
+            Objects.requireNonNull(composer, "composer");
+            return super.thenComposeAsync(
+                    value -> scope.invoke(false, () -> composer.apply(value)));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> thenComposeAsync(
+                Function<? super T, ? extends CompletionStage<U>> composer, Executor executor) {
+            Objects.requireNonNull(composer, "composer");
+            return super.thenComposeAsync(
+                    value -> scope.invoke(false, () -> composer.apply(value)), executor);
+        }
+
+        @Override
+        public CompletableFuture<T> whenComplete(
+                BiConsumer<? super T, ? super Throwable> observer) {
+            Objects.requireNonNull(observer, "observer");
+            return super.whenComplete(
+                    (value, failure) ->
+                            scope.observe(
+                                    failure,
+                                    () -> {
+                                        observer.accept(value, unwrap(failure));
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<T> whenCompleteAsync(
+                BiConsumer<? super T, ? super Throwable> observer) {
+            Objects.requireNonNull(observer, "observer");
+            return super.whenCompleteAsync(
+                    (value, failure) ->
+                            scope.observe(
+                                    failure,
+                                    () -> {
+                                        observer.accept(value, unwrap(failure));
+                                        return null;
+                                    }));
+        }
+
+        @Override
+        public CompletableFuture<T> whenCompleteAsync(
+                BiConsumer<? super T, ? super Throwable> observer, Executor executor) {
+            Objects.requireNonNull(observer, "observer");
+            return super.whenCompleteAsync(
+                    (value, failure) ->
+                            scope.observe(
+                                    failure,
+                                    () -> {
+                                        observer.accept(value, unwrap(failure));
+                                        return null;
+                                    }),
+                    executor);
+        }
+
+        @Override
+        public <U> CompletableFuture<U> handle(
+                BiFunction<? super T, Throwable, ? extends U> handler) {
+            Objects.requireNonNull(handler, "handler");
+            return super.handle(
+                    (value, failure) ->
+                            scope.observe(failure, () -> handler.apply(value, unwrap(failure))));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> handleAsync(
+                BiFunction<? super T, Throwable, ? extends U> handler) {
+            Objects.requireNonNull(handler, "handler");
+            return super.handleAsync(
+                    (value, failure) ->
+                            scope.observe(failure, () -> handler.apply(value, unwrap(failure))));
+        }
+
+        @Override
+        public <U> CompletableFuture<U> handleAsync(
+                BiFunction<? super T, Throwable, ? extends U> handler, Executor executor) {
+            Objects.requireNonNull(handler, "handler");
+            return super.handleAsync(
+                    (value, failure) ->
+                            scope.observe(failure, () -> handler.apply(value, unwrap(failure))),
+                    executor);
+        }
+
+        @Override
+        public CompletableFuture<T> exceptionally(Function<Throwable, ? extends T> recovery) {
+            Objects.requireNonNull(recovery, "recovery");
+            return super.exceptionally(
+                    failure -> scope.observe(failure, () -> recovery.apply(unwrap(failure))));
+        }
+
+        @Override
+        public CompletableFuture<T> exceptionallyAsync(Function<Throwable, ? extends T> recovery) {
+            Objects.requireNonNull(recovery, "recovery");
+            return super.exceptionallyAsync(
+                    failure -> scope.observe(failure, () -> recovery.apply(unwrap(failure))));
+        }
+
+        @Override
+        public CompletableFuture<T> exceptionallyAsync(
+                Function<Throwable, ? extends T> recovery, Executor executor) {
+            Objects.requireNonNull(recovery, "recovery");
+            return super.exceptionallyAsync(
+                    failure -> scope.observe(failure, () -> recovery.apply(unwrap(failure))),
+                    executor);
         }
     }
 }

@@ -1,228 +1,213 @@
 package dev.itemloom.paper.compat;
 
+import dev.itemloom.api.ItemContext;
+import dev.itemloom.compat.ni.*;
+import dev.itemloom.compat.ni.action.*;
+import dev.itemloom.compat.ni.script.*;
+import dev.itemloom.core.*;
+import dev.itemloom.paper.action.*;
+import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
+import dev.itemloom.paper.compat.script.*;
+import dev.itemloom.paper.integration.*;
+import dev.itemloom.paper.nms.NmsItems;
+import dev.itemloom.paper.runtime.FormatRuntimeLoader;
+import java.io.*;
 import java.nio.file.Path;
 import java.time.Clock;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.function.BiFunction;
-import java.util.logging.Logger;
-import dev.itemloom.compat.ni.NiCompiledItem;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiInheritance;
-import dev.itemloom.compat.ni.NiNodes;
-import dev.itemloom.compat.ni.NiRepository;
-import dev.itemloom.compat.ni.NiScripts;
-import dev.itemloom.compat.ni.script.LegacyScriptBindings;
-import dev.itemloom.core.GenerationContext;
-import dev.itemloom.core.ItemEngine;
-import dev.itemloom.core.ActionFlow;
-import dev.itemloom.compat.ni.action.NiActionContext;
-import dev.itemloom.paper.action.PaperActions;
-import dev.itemloom.paper.compat.script.LegacyItemConfig;
-import dev.itemloom.paper.compat.script.LegacyItemGenerator;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.*;
+import java.util.random.RandomGenerator;
+import jdk.dynalink.beans.StaticClass;
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.craftbukkit.inventory.CraftItemStack;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/** Revision-owned compatibility resources and their compiled independent recipes. */
+/** A prepared revision owns its registries, script contexts and lifecycle resources. */
 public final class NiCatalog implements AutoCloseable {
-    private final NiScripts scripts;
     private final NiRepository.Input input;
-    private final Path inputRoot;
+    private final Path root;
     private final JavaPlugin plugin;
-    private final NiEvaluation lifecycle;
-    private final Logger logger;
+    private final BiFunction<Object, String, String> placeholders;
+    private final NiNodes nodes = new NiNodes();
+    private final NiScripts scripts;
+    private final NiItemOperations items;
     private final NiItemRegistry registry;
     private final NiPackRegistry packs;
-    private final dev.itemloom.paper.action.ItemDrops drops;
-    private final dev.itemloom.paper.integration.OptionalItemSources itemSources =
-            new dev.itemloom.paper.integration.OptionalItemSources();
-    private final PaperActions actions;
-    private final NiNodes nodes;
-    private final NiEvaluation.Host host;
-    private final NiItemOperations items;
-    private final dev.itemloom.paper.compat.script.LegacyItemPlaceholder itemPlaceholders;
     private final NiTranslations translations;
-    private dev.itemloom.paper.action.ItemTriggers triggers;
-    private dev.itemloom.paper.action.ItemMaintenance maintenance;
-    private final Map<Object, ActionFlow.Step<NiActionContext>> checks = new LinkedHashMap<>();
-    private boolean closed;
-    private boolean reloadingItems;
+    private final LegacyItemPlaceholder itemPlaceholders;
+    private final OptionalItemSources sources = new OptionalItemSources();
+    private final NiEvaluation.Host host;
+    private final PaperActions actions;
+    private final ItemDrops drops;
+    private ItemTriggers triggers;
+    private ItemMaintenance maintenance;
+    private volatile boolean closed;
+    private boolean reloading;
+    private final LinkedHashMap<Object, ActionFlow.Step<NiActionContext>> checks =
+            new LinkedHashMap<>();
 
     public NiCatalog(
             long revision,
             NiRepository.Input input,
             JavaPlugin plugin,
             BiFunction<Object, String, String> placeholders,
-            dev.itemloom.paper.action.PlayerActionState players) {
+            PlayerActionState players) {
         this(revision, input, plugin.getDataFolder().toPath(), plugin, placeholders, players);
     }
 
     public NiCatalog(
             long revision,
             NiRepository.Input input,
-            Path inputRoot,
+            Path root,
             JavaPlugin plugin,
             BiFunction<Object, String, String> placeholders,
-            dev.itemloom.paper.action.PlayerActionState players) {
-        this.input = input;
-        this.inputRoot = inputRoot.toAbsolutePath().normalize();
-        this.plugin = plugin;
-        logger = plugin.getLogger();
-        nodes = new NiNodes();
-        Map<String, String> sources = new LinkedHashMap<>(input.scripts());
-        input.expansions().forEach((path, source) -> sources.put("@expansions/" + path, source));
-        LegacyScriptBindings bindings = new LegacyScriptBindings(nodes);
-        scripts = new NiScripts(Map.of(), Map.of("plugin", plugin), bindings);
-        actions =
-                new PaperActions(
-                        plugin,
-                        scripts,
-                        players,
-                        input.settings().longValue("ItemAction.comboInterval", 500));
-        var actionManager =
-                new dev.itemloom.compat.ni.script.LegacyActionManager(
-                        actions.compiler(), actions::run);
-        bindings.actionManager(actionManager);
-        var triggerFactory =
-                new dev.itemloom.paper.compat.script.LegacyActionTrigger.Factory(
-                        actions, actionManager, scripts::validate);
-        items = new NiItemOperations(this);
-        itemPlaceholders = new dev.itemloom.paper.compat.script.LegacyItemPlaceholder(items);
-        registry = new NiItemRegistry(revision, input, this.inputRoot, items);
-        packs = new NiPackRegistry(items);
-        translations = new NiTranslations(input.settings().string("Language", "zh_cn"), logger);
-        var scheduler =
-                new dev.itemloom.paper.compat.script.LegacyScheduler(
-                        plugin, actions.tasks(), scripts);
-        drops = new dev.itemloom.paper.action.ItemDrops(items, scheduler, actions.integrations());
-        var itemUtils = new dev.itemloom.paper.compat.script.LegacyItemUtils(translations, items);
-        bindings.alias("pers.neige.neigeitems.utils.ItemUtils", itemUtils);
-        bindings.alias(
-                "pers.neige.neigeitems.item.ItemInfo",
-                jdk.dynalink.beans.StaticClass.forClass(
-                        dev.itemloom.paper.compat.script.LegacyItemInfo.class));
-        bindings.alias(
-                "pers.neige.neigeitems.item.action.ComboInfo",
-                jdk.dynalink.beans.StaticClass.forClass(PaperActions.ComboInfo.class));
-        bindings.alias(
-                "pers.neige.neigeitems.utils.PlayerUtils",
-                new dev.itemloom.paper.compat.script.LegacyPlayerUtils(plugin, players));
-        bindings.alias("pers.neige.neigeitems.utils.SchedulerUtils", scheduler);
-        bindings.alias(
-                "pers.neige.neigeitems.manager.HookerManager",
-                new dev.itemloom.paper.compat.script.LegacyHooks(
-                        placeholders, actions.integrations(), itemSources));
-        bindings.alias(
-                "pers.neige.neigeitems.event.ItemActionEvent",
-                jdk.dynalink.beans.StaticClass.forClass(
-                        dev.itemloom.paper.compat.script.LegacyItemActionEvent.class));
-        bindings.alias(
-                "pers.neige.neigeitems.item.action.ItemActionType",
-                jdk.dynalink.beans.StaticClass.forClass(
-                        dev.itemloom.paper.compat.script.LegacyItemActionType.class));
-        bindings.alias("pers.neige.neigeitems.item.action.ActionTrigger", triggerFactory);
-        bindings.alias(
-                "pers.neige.neigeitems.item.action.ConsumeInfo", triggerFactory.consumeFactory());
-        NiItemScriptAliases.install(bindings, items, actions, placeholders);
-        dev.itemloom.paper.compat.script.NbtScriptAliases.install(bindings);
-        scripts.setActionInitializer(new dev.itemloom.paper.compat.script.ActionScriptLibrary());
-        host =
-                new NiEvaluation.Host() {
-                    public void warning(String message) {
-                        logger.warning(message);
-                    }
-
-                    public boolean papiJavascript() {
-                        return input.settings().bool("Papi.enableJs", false);
-                    }
-
-                    public boolean papiRegex() {
-                        return input.settings().bool("Papi.enableRegex", false);
-                    }
-
-                    public String placeholder(Object player, String parameters) {
-                        return placeholders.apply(player, parameters);
-                    }
-
-                    public String itemValue(String key, String parameters) {
-                        return NiItemNodes.value(
-                                key, parameters, NiActionContext.currentOrNull(), translations);
-                    }
-
-                    public String legacyItemValue(
-                            String key,
-                            String parameters,
-                            ItemStack item,
-                            Object nbt,
-                            Map<String, String> rolls) {
-                        return itemUtils.sectionValue(key, parameters, item, nbt, rolls);
-                    }
-
-                    public void check(Object actions, NiEvaluation context, String value) {
-                        Map<String, Object> params = new java.util.HashMap<>();
-                        params.put("value", value);
-                        params.put("cache", context.legacyCache());
-                        params.put(
-                                "sections",
-                                new dev.itemloom.compat.ni.script.LegacyConfigReader.BukkitReader(
-                                        dev.itemloom.compat.ni.NiYaml.toSection(
-                                                context.sections())));
-                        NiActionContext call = actionContext(context.player(), params);
-                        call.getGlobal().putAll(params);
-                        NiCatalog.this.actions.fork(compileCheck(actions), call, true);
-                    }
-                };
-        lifecycle =
-                new NiEvaluation(
-                        new GenerationContext(
-                                Map.of(), java.util.concurrent.ThreadLocalRandom.current()),
-                        null,
-                        null,
-                        NiEvaluation.Mode.SECTION,
-                        nodes,
-                        scripts,
-                        host);
+            PlayerActionState players) {
+        this.input = Objects.requireNonNull(input);
+        this.root = root.toAbsolutePath().normalize();
+        this.plugin = Objects.requireNonNull(plugin);
+        this.placeholders = Objects.requireNonNull(placeholders);
         try {
-            registry.initializeFiles(this.inputRoot);
+            LegacyScriptBindings bindings = new LegacyScriptBindings(nodes);
+            scripts = new NiScripts(Map.of(), Map.of("plugin", plugin), bindings);
+            items = new NiItemOperations(this);
+            registry = new NiItemRegistry(revision, input, this.root, items);
+            packs = new NiPackRegistry(items);
+            translations =
+                    new NiTranslations(
+                            input.settings().string("Language", "zh_cn"), plugin.getLogger());
+            itemPlaceholders = new LegacyItemPlaceholder(items);
+            actions =
+                    new PaperActions(
+                            plugin,
+                            scripts,
+                            players,
+                            input.settings().longValue("ItemAction.comboInterval", 500));
+            LegacyItemUtils itemUtils = new LegacyItemUtils(translations, items);
+            host =
+                    new NiEvaluation.Host() {
+                        @Override
+                        public String placeholder(Object player, String text) {
+                            return NiCatalog.this.placeholders.apply(player, text);
+                        }
+
+                        @Override
+                        public String itemValue(String key, String parameters) {
+                            return NiItemNodes.value(
+                                    key, parameters, NiActionContext.currentOrNull(), translations);
+                        }
+
+                        @Override
+                        public String legacyItemValue(
+                                String key,
+                                String parameters,
+                                ItemStack item,
+                                Object nbt,
+                                Map<String, String> rolls) {
+                            return itemUtils.sectionValue(key, parameters, item, nbt, rolls);
+                        }
+
+                        @Override
+                        public void warning(String message) {
+                            plugin.getLogger().warning(message);
+                        }
+
+                        @Override
+                        public boolean papiJavascript() {
+                            return input.settings().bool("Papi.enableJs", false);
+                        }
+
+                        @Override
+                        public boolean papiRegex() {
+                            return input.settings().bool("Papi.enableRegex", false);
+                        }
+
+                        @Override
+                        public void check(Object source, NiEvaluation evaluation, String value) {
+                            Map<String, Object> params = new LinkedHashMap<>();
+                            params.put("value", value);
+                            params.put("cache", evaluation.legacyCache());
+                            params.put(
+                                    "sections",
+                                    new LegacyConfigReader.BukkitReader(
+                                            NiConfigViews.section(evaluation.sections())));
+                            NiActionContext context = actionContext(evaluation.player(), params);
+                            context.getGlobal().putAll(params);
+                            actions.fork(checkAction(source), context, true);
+                        }
+                    };
+            LegacyScheduler scheduler = new LegacyScheduler(plugin, actions.tasks(), scripts);
+            drops = new ItemDrops(items, scheduler, actions.integrations());
+            LegacyActionManager manager = new LegacyActionManager(actions.compiler(), actions::run);
+            bindings.actionManager(manager);
+            alias(bindings, "utils.ItemUtils", itemUtils);
+            alias(bindings, "item.ItemInfo", StaticClass.forClass(LegacyItemInfo.class));
+            alias(
+                    bindings,
+                    "item.action.ComboInfo",
+                    StaticClass.forClass(PaperActions.ComboInfo.class));
+            alias(bindings, "utils.PlayerUtils", new LegacyPlayerUtils(plugin, players));
+            alias(bindings, "utils.SchedulerUtils", scheduler);
+            alias(
+                    bindings,
+                    "manager.HookerManager",
+                    new LegacyHooks(placeholders, actions.integrations(), sources));
+            alias(
+                    bindings,
+                    "event.ItemActionEvent",
+                    StaticClass.forClass(LegacyItemActionEvent.class));
+            alias(
+                    bindings,
+                    "item.action.ItemActionType",
+                    StaticClass.forClass(LegacyItemActionType.class));
+            LegacyActionTrigger.Factory factory =
+                    new LegacyActionTrigger.Factory(actions, manager, scripts::validate);
+            alias(bindings, "item.action.ActionTrigger", factory);
+            alias(bindings, "item.action.ConsumeInfo", factory.consumeFactory());
+            NiItemScriptAliases.install(bindings, items, actions, placeholders);
+            NbtScriptAliases.install(bindings);
+            scripts.setActionInitializer(new ActionScriptLibrary());
+            registry.initializeFiles(this.root);
+            registry.initialize(compileAll(registry.configs(), input));
+            packs.initialize(input.packs());
             actions.functions(input.functions());
             triggers =
-                    new dev.itemloom.paper.action.ItemTriggers(
-                            input, actions, players, this::actionContext, plugin, triggerFactory);
-            Map<String, LegacyItemGenerator> generators = new LinkedHashMap<>();
-            for (var entry : new NiInheritance(input).resolveAll().entrySet()) {
-                String id = entry.getKey();
-                NiConfig config = entry.getValue();
-                try {
-                    generators.put(id, compile(registry.configs().get(id), config));
-                } catch (RuntimeException error) {
-                    throw new IllegalArgumentException(
-                            input.items().get(id).source() + " / " + id + ": " + error.getMessage(),
-                            error);
-                }
+                    new ItemTriggers(input, actions, players, this::actionContext, plugin, factory);
+            Map<String, String> loaded = new LinkedHashMap<>(input.scripts());
+            input.expansions().forEach((path, source) -> loaded.put("@expansions/" + path, source));
+            evaluation(null, NiEvaluation.Mode.SECTION)
+                    .scoped(
+                            () -> {
+                                scripts.loadSources(loaded);
+                                expansions("enable", false);
+                                return null;
+                            });
+            maintenance =
+                    new ItemMaintenance(
+                            FormatRuntimeLoader.maintenance(this),
+                            FormatRuntimeLoader.durability(this),
+                            plugin);
+        } catch (RuntimeException | Error failure) {
+            try {
+                close();
+            } catch (RuntimeException | Error cleanup) {
+                failure.addSuppressed(cleanup);
             }
-            registry.initialize(generators);
-            packs.initialize(input.packs());
-            // Source evaluation and enable callbacks can generate items. Actions and nodes
-            // resolve custom registrations when executed, so preparing recipes first is safe.
-            lifecycle.scoped(
-                    () -> {
-                        scripts.loadSources(sources);
-                        return null;
-                    });
-            invokeExtensions("enable", false);
-            maintenance = new dev.itemloom.paper.action.ItemMaintenance(this, plugin);
-        } catch (RuntimeException error) {
-            if (triggers != null) triggers.close();
-            invokeExtensions("disable", true);
-            actions.close();
-            scripts.close();
-            throw error;
+            throw failure;
         }
     }
 
+    private static void alias(LegacyScriptBindings bindings, String name, Object value) {
+        bindings.alias("pers.neige.neigeitems." + name, value);
+    }
+
     public ItemEngine.Catalog<ItemStack> catalog() {
-        return registry == null ? null : registry.catalog();
+        return registry.catalog();
     }
 
     public NiItemRegistry registry() {
@@ -233,12 +218,12 @@ public final class NiCatalog implements AutoCloseable {
         return packs;
     }
 
-    public dev.itemloom.paper.action.ItemDrops drops() {
+    public ItemDrops drops() {
         return drops;
     }
 
-    public dev.itemloom.paper.integration.OptionalItemSources itemSources() {
-        return itemSources;
+    public OptionalItemSources itemSources() {
+        return sources;
     }
 
     public NiRepository.Input input() {
@@ -246,7 +231,7 @@ public final class NiCatalog implements AutoCloseable {
     }
 
     public Path inputRoot() {
-        return inputRoot;
+        return root;
     }
 
     public JavaPlugin plugin() {
@@ -257,41 +242,12 @@ public final class NiCatalog implements AutoCloseable {
         return items;
     }
 
-    public dev.itemloom.paper.compat.script.LegacyItemPlaceholder itemPlaceholders() {
+    public LegacyItemPlaceholder itemPlaceholders() {
         return itemPlaceholders;
     }
 
     public NiDisplayTemplate displayTemplate(String id) {
-        items.ensureActive();
-        return id == null ? null : registry.displays().get(id);
-    }
-
-    /** Resolves only saved rolls and the viewer; generation sections are deliberately absent. */
-    public void display(
-            NiDisplayTemplate template, org.bukkit.entity.Player viewer, ItemStack copy) {
-        items.ensureActive();
-        if (!template.dynamic()) {
-            template.apply(
-                    org.bukkit.craftbukkit.inventory.CraftItemStack.unwrap(copy), text -> text);
-            return;
-        }
-        var identity = new dev.itemloom.paper.nms.ItemStateCodec().read(copy);
-        if (identity.isEmpty()) identity = new NiItemMigration().identify(copy);
-        Map<String, String> data =
-                new java.util.HashMap<>(
-                        identity.map(dev.itemloom.core.ItemIdentity::rolls).orElse(Map.of()));
-        var context = actionContext(viewer, Map.of("itemStack", copy, "data", data));
-        Map<String, Object> cache = new java.util.HashMap<>(data);
-        cache.put("viewer_name", viewer.getName());
-        cache.put("viewer_uuid", viewer.getUniqueId().toString());
-        context.set(dev.itemloom.compat.ni.action.NiContextKeys.SECTION_CACHE, cache);
-        context.invoke(
-                () -> {
-                    template.apply(
-                            org.bukkit.craftbukkit.inventory.CraftItemStack.unwrap(copy),
-                            text -> itemPlaceholders.parse(copy, context.parse(text)).getText());
-                    return null;
-                });
+        return registry.displays().get(id);
     }
 
     public String itemName(ItemStack item) {
@@ -299,290 +255,329 @@ public final class NiCatalog implements AutoCloseable {
     }
 
     public boolean active() {
-        return !closed && actions.active();
+        return !closed;
     }
 
-    public dev.itemloom.paper.action.ItemTriggers triggers() {
+    public ItemTriggers triggers() {
         return triggers;
     }
 
-    public dev.itemloom.paper.action.ItemMaintenance maintenance() {
+    public ItemMaintenance maintenance() {
         return maintenance;
     }
 
     public void activate() {
-        if (maintenance != null) maintenance.activate();
+        items.ensureActive();
+        maintenance.activate();
     }
 
-    /** ItemManager's local reload retains this owner's scripts, actions, tasks and revision number. */
+    public void display(NiDisplayTemplate template, Player viewer, ItemStack item) {
+        items.ensureActive();
+        var target = CraftItemStack.asNMSCopy(item);
+        if (!template.dynamic()) template.apply(target, UnaryOperator.identity());
+        else {
+            ItemIdentity identity = NiItemNodes.identity(item);
+            Map<String, String> rolls =
+                    identity == null
+                            ? new LinkedHashMap<>()
+                            : new LinkedHashMap<>(identity.rolls());
+            Map<String, Object> params = new LinkedHashMap<>();
+            ItemStack displayCopy = item.clone();
+            params.put("itemStack", displayCopy);
+            params.put("data", rolls);
+            NiActionContext context = actionContext(viewer, params);
+            Map<String, Object> cache = new LinkedHashMap<>(rolls);
+            if (viewer != null) {
+                cache.put("viewer_name", viewer.getName());
+                cache.put("viewer_uuid", viewer.getUniqueId().toString());
+            }
+            context.set(NiContextKeys.SECTION_CACHE, cache);
+            template.apply(
+                    target,
+                    text -> itemPlaceholders.parse(displayCopy, context.parse(text)).getText());
+        }
+        items.ensureActive();
+        NmsItems.replace(item, CraftItemStack.asBukkitCopy(target));
+    }
+
     public void reloadItems(boolean includeGenerators) {
         items.ensureActive();
-        if (reloadingItems)
-            throw new IllegalStateException("Item directory reload is already in progress");
-        reloadingItems = true;
+        if (reloading) throw new IllegalStateException("Recursive item reload");
+        reloading = true;
         try {
-            java.util.function.UnaryOperator<String> transform =
-                    org.bukkit.Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")
-                            ? dev.itemloom.paper.integration.PapiBridge::itemSections
-                            : java.util.function.UnaryOperator.identity();
-            NiRepository.ItemInput loaded = new NiRepository().readItems(inputRoot, transform);
-            Map<String, LegacyItemConfig> origins =
-                    NiItemRegistry.originals(loaded.items(), inputRoot);
-            Map<String, LegacyItemGenerator> generators = null;
-            if (includeGenerators) {
-                NiRepository.Input snapshot =
-                        new NiRepository.Input(
-                                input.settings(),
-                                loaded.items(),
-                                input.globalFiles(),
-                                input.globalValues(),
-                                input.packs(),
-                                input.actions(),
-                                input.functions(),
-                                input.scripts(),
-                                input.expansions(),
-                                input.sources());
-                generators = new LinkedHashMap<>();
-                for (var entry : new NiInheritance(snapshot).resolveAll().entrySet()) {
-                    String id = entry.getKey();
-                    try {
-                        generators.put(id, compile(origins.get(id), entry.getValue()));
-                    } catch (RuntimeException error) {
-                        throw new IllegalArgumentException(
-                                loaded.items().get(id).source()
-                                        + " / "
-                                        + id
-                                        + ": "
-                                        + error.getMessage(),
-                                error);
-                    }
-                }
-            }
-            Runnable commit = registry.prepareReload(origins, loaded.source().files(), generators);
-            loaded.source().verifyUnchanged();
+            UnaryOperator<String> preprocess =
+                    Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")
+                            ? PapiBridge::itemSections
+                            : UnaryOperator.identity();
+            NiRepository.ItemInput next = new NiRepository().readItems(root, preprocess);
+            Map<String, LegacyItemConfig> originals = NiItemRegistry.originals(next.items(), root);
+            Map<String, LegacyItemGenerator> compiled =
+                    includeGenerators ? compileAll(originals, withItems(next.items())) : null;
+            Runnable commit = registry.prepareReload(originals, next.source().files(), compiled);
+            next.source().verifyUnchanged();
             items.ensureActive();
             commit.run();
-        } catch (java.io.IOException error) {
-            throw new java.io.UncheckedIOException(
-                    "Cannot reload item directory: " + inputRoot.resolve("Items"), error);
+        } catch (IOException error) {
+            throw new UncheckedIOException(error);
         } finally {
-            reloadingItems = false;
+            reloading = false;
         }
     }
 
-    /** Generation remains pinned to this revision, including script calls during reload. */
     public ItemStack generate(
-            String id,
-            org.bukkit.OfflinePlayer viewer,
-            Map<String, String> rolls,
-            boolean updateCallerCache) {
+            String id, OfflinePlayer viewer, Map<String, String> rolls, boolean share) {
         items.ensureActive();
-        LegacyItemGenerator generator = registry.generators().get(id);
-        if (generator == null) throw new IllegalArgumentException("Unknown item: " + id);
-        return generate(generator, viewer, rolls, updateCallerCache);
+        return generate(registry.generators().get(id), viewer, rolls, share);
     }
 
-    /** A detached or replaced generator keeps its own recipe and event actions within this owner. */
     public ItemStack generate(
             LegacyItemGenerator generator,
-            org.bukkit.OfflinePlayer viewer,
+            OfflinePlayer viewer,
             Map<String, String> rolls,
-            boolean updateCallerCache) {
+            boolean share) {
         items.ensureActive();
+        if (generator == null) return null;
         if (!generator.ownedBy(items))
-            throw new IllegalArgumentException(
-                    "Generator belongs to another item catalog revision");
-        String id = generator.getId();
+            throw new IllegalArgumentException("Generator belongs to another revision");
         GenerationContext context =
-                updateCallerCache && rolls != null
-                        ? GenerationContext.sharingRolls(
-                                rolls, java.util.concurrent.ThreadLocalRandom.current())
+                share && rolls != null
+                        ? GenerationContext.sharingRolls(rolls, RandomGenerator.getDefault())
                         : new GenerationContext(
-                                rolls == null ? Map.of() : rolls,
-                                java.util.concurrent.ThreadLocalRandom.current());
-        context.put(dev.itemloom.api.ItemContext.VIEWER, viewer);
-        var generated = generator.compiledRecipe().createGenerated(context);
-        if (!active()) throw new IllegalStateException("Item catalog closed during generation");
-        Map<String, String> cache = context.rolls();
-        var event =
-                dev.itemloom.paper.compat.script.LegacyItemGenerateEvent.fromGenerated(
-                        id, viewer, cache, generated);
-        org.bukkit.Bukkit.getPluginManager().callEvent(event);
-        if (!active()) throw new IllegalStateException("Item catalog closed during generation");
-        if (generated.postGenerate()) postGenerated(generator, viewer, event.getItem(), cache);
-        if (!active())
-            throw new IllegalStateException("Item catalog closed during post-generation actions");
-        return event.getItem();
-    }
-
-    /** Compiles an unregistered item against this revision's current original-config registry. */
-    public LegacyItemGenerator compile(LegacyItemConfig origin) {
+                                rolls == null ? Map.of() : rolls, RandomGenerator.getDefault());
+        context.put(ItemContext.VIEWER, viewer);
+        NiPaperRecipe.Generated generated = generator.compiledRecipe().createGenerated(context);
         items.ensureActive();
-        java.util.Objects.requireNonNull(origin, "itemConfig");
-        Map<String, NiRepository.Definition> definitions = new LinkedHashMap<>();
-        registry.configs()
-                .forEach(
-                        (key, value) ->
-                                definitions.put(
-                                        key,
-                                        new NiRepository.Definition(
-                                                key,
-                                                String.valueOf(value.getFile()),
-                                                original(value))));
-        NiRepository.Input snapshot =
-                new NiRepository.Input(
-                        input.settings(),
-                        definitions,
-                        input.globalFiles(),
-                        input.globalValues(),
-                        input.packs(),
-                        input.actions(),
-                        input.functions(),
-                        input.scripts(),
-                        input.expansions(),
-                        input.sources());
-        return compile(origin, new NiInheritance(snapshot).resolveRoot(original(origin)));
-    }
-
-    private static NiConfig original(LegacyItemConfig origin) {
-        return origin.getConfigSection() == null
-                ? new NiConfig(Map.of())
-                : dev.itemloom.compat.ni.NiYaml.fromSection(origin.getConfigSection());
-    }
-
-    private LegacyItemGenerator compile(LegacyItemConfig origin, NiConfig resolved) {
-        prepareChecks(resolved.values());
-        ActionFlow.Step<NiActionContext> postStep = null;
-        NiConfig event = resolved.section("event");
-        NiConfig post = event == null ? null : event.section("post-generate");
-        if (post != null) {
-            Map<String, Object> trigger = new java.util.HashMap<>(post.values());
-            trigger.put("type", "condition");
-            postStep = actions.compiler().compile(trigger);
+        LegacyItemGenerateEvent event =
+                LegacyItemGenerateEvent.fromGenerated(
+                        generator.getId(), viewer, context.rolls(), generated);
+        event.call();
+        items.ensureActive();
+        ItemStack result = event.getItemStack();
+        if (generated.postGenerate()) {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("id", generator.getId());
+            params.put("item", generator);
+            params.put("itemStack", result);
+            params.put("data", context.rolls());
+            NiActionContext action =
+                    actionContext(viewer == null ? null : viewer.getPlayer(), params);
+            action.getGlobal().put("id", generator.getId());
+            action.getGlobal().put("item", generator);
+            if (generator.postGenerate() != null) actions.run(generator.postGenerate(), action);
+            result.setAmount(1);
         }
-        String source = String.valueOf(origin.getFile());
-        NiPaperRecipe recipe =
-                new NiPaperRecipe(
-                        new NiCompiledItem(origin.getId(), source, resolved),
-                        nodes,
-                        scripts,
-                        host,
-                        Clock.systemUTC(),
-                        message -> logger.warning(source + " / " + origin.getId() + ": " + message),
-                        itemSources);
-        return new LegacyItemGenerator(items, origin, recipe, postStep);
+        items.ensureActive();
+        return result;
     }
 
-    private ActionFlow.Step<NiActionContext> compileCheck(Object source) {
-        synchronized (scripts) {
-            var compiled = checks.get(source);
-            if (compiled == null) {
-                compiled = actions.compiler().compile(source);
-                if (checks.size() >= 256) checks.remove(checks.keySet().iterator().next());
-                checks.put(source, compiled);
-            }
-            return compiled;
+    public LegacyItemGenerator compile(LegacyItemConfig original) {
+        items.ensureActive();
+        Map<String, NiRepository.Definition> definitions = definitions(registry.configs());
+        NiInheritance inheritance = new NiInheritance(withItems(definitions));
+        return compile(
+                original, resolve(original, () -> inheritance.resolveRoot(config(original))));
+    }
+
+    private Map<String, LegacyItemGenerator> compileAll(
+            Map<String, LegacyItemConfig> originals, NiRepository.Input source) {
+        NiInheritance inheritance = new NiInheritance(source);
+        Map<String, NiConfig> resolved = new LinkedHashMap<>();
+        originals.forEach(
+                (id, original) ->
+                        resolved.put(id, resolve(original, () -> inheritance.resolve(id))));
+        Map<String, LegacyItemGenerator> result = new LinkedHashMap<>();
+        originals.forEach((id, original) -> result.put(id, compile(original, resolved.get(id))));
+        return result;
+    }
+
+    private static NiConfig resolve(LegacyItemConfig original, Supplier<NiConfig> resolver) {
+        try {
+            return resolver.get();
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException(
+                    original.getFile() + " / " + original.getId() + ": " + error.getMessage(),
+                    error);
         }
+    }
+
+    private LegacyItemGenerator compile(LegacyItemConfig original, NiConfig resolved) {
+        try {
+            NiPaperRecipe recipe =
+                    new NiPaperRecipe(
+                            new NiCompiledItem(
+                                    original.getId(), String.valueOf(original.getFile()), resolved),
+                            nodes,
+                            scripts,
+                            host,
+                            Clock.systemUTC(),
+                            message ->
+                                    plugin.getLogger()
+                                            .warning(
+                                                    original.getFile()
+                                                            + " / "
+                                                            + original.getId()
+                                                            + ": "
+                                                            + message),
+                            sources);
+            prepareChecks(resolved.values());
+            NiConfig event = resolved.section("event");
+            NiConfig post = event == null ? null : event.section("post-generate");
+            Object action = post == null ? null : post.with("type", "condition").values();
+            return new LegacyItemGenerator(
+                    items,
+                    original,
+                    recipe,
+                    action == null ? null : actions.compiler().compile(action));
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException(
+                    original.getFile() + " / " + original.getId() + ": " + error.getMessage(),
+                    error);
+        }
+    }
+
+    private static NiConfig config(LegacyItemConfig original) {
+        ConfigurationSection section = original.getConfigSection();
+        return section == null ? new NiConfig(Map.of()) : NiYaml.fromSection(section);
+    }
+
+    private static Map<String, NiRepository.Definition> definitions(
+            Map<String, LegacyItemConfig> originals) {
+        Map<String, NiRepository.Definition> values = new LinkedHashMap<>();
+        originals.forEach(
+                (id, origin) ->
+                        values.put(
+                                id,
+                                new NiRepository.Definition(
+                                        id, String.valueOf(origin.getFile()), config(origin))));
+        return values;
+    }
+
+    private NiRepository.Input withItems(Map<String, NiRepository.Definition> definitions) {
+        return new NiRepository.Input(
+                input.settings(),
+                definitions,
+                input.globalFiles(),
+                input.globalValues(),
+                input.packs(),
+                input.actions(),
+                input.functions(),
+                input.scripts(),
+                input.expansions(),
+                input.sources());
+    }
+
+    private NiEvaluation evaluation(Object caster, NiEvaluation.Mode mode) {
+        return new NiEvaluation(
+                new GenerationContext(Map.of(), RandomGenerator.getDefault()),
+                null,
+                caster,
+                mode,
+                nodes,
+                scripts,
+                host);
+    }
+
+    @SuppressWarnings("unchecked")
+    public NiActionContext actionContext(Object caster, Map<String, Object> params) {
+        Map<String, Object> values = params == null ? new LinkedHashMap<>() : params;
+        NiActionContext context =
+                new NiActionContext(
+                        evaluation(caster, NiEvaluation.Mode.ACTION),
+                        caster,
+                        values,
+                        actions::active);
+        if (values.get("itemStack") instanceof ItemStack item) {
+            context.set(NiContextKeys.ITEM_STACK, item);
+            context.set(NiContextKeys.NBT, new LegacyNbtItemStack(item).getTag());
+        }
+        if (values.containsKey("itemTag")) context.set(NiContextKeys.NBT, values.get("itemTag"));
+        if (values.get("data") instanceof Map<?, ?> data)
+            context.set(NiContextKeys.DATA, (Map<String, String>) data);
+        if (values.get("event") instanceof Event event) context.set(NiContextKeys.EVENT, event);
+        return context;
+    }
+
+    public CompletionStage<ActionFlow.Result> runFunction(
+            String name, Object caster, Map<String, Object> params) {
+        return actions.function(name, actionContext(caster, params));
+    }
+
+    private synchronized ActionFlow.Step<NiActionContext> checkAction(Object source) {
+        ActionFlow.Step<NiActionContext> result = checks.get(source);
+        if (result == null) {
+            result = actions.compiler().compile(source);
+            checks.put(source, result);
+            if (checks.size() > 256) checks.remove(checks.keySet().iterator().next());
+        }
+        return result;
     }
 
     private void prepareChecks(Object value) {
         if (value instanceof Map<?, ?> map) {
-            if ("check".equals(map.get("type"))) compileCheck(map.get("actions"));
+            if ("check".equals(map.get("type"))) checkAction(map.get("actions"));
             map.values().forEach(this::prepareChecks);
-        } else if (value instanceof java.util.List<?> list) list.forEach(this::prepareChecks);
+        } else if (value instanceof List<?> list) list.forEach(this::prepareChecks);
     }
 
-    public NiActionContext actionContext(Object caster, Map<String, Object> params) {
-        NiActionContext context =
-                new NiActionContext(
-                        new NiEvaluation(
-                                new GenerationContext(
-                                        Map.of(), java.util.concurrent.ThreadLocalRandom.current()),
-                                null,
-                                caster,
-                                NiEvaluation.Mode.ACTION,
-                                nodes,
-                                scripts,
-                                host),
-                        caster,
-                        params,
-                        actions::active);
-        if (params != null) {
-            if (params.get("itemStack") instanceof ItemStack item) {
-                context.set(dev.itemloom.compat.ni.action.NiContextKeys.ITEM_STACK, item);
-                context.set(
-                        dev.itemloom.compat.ni.action.NiContextKeys.NBT,
-                        new dev.itemloom.paper.compat.nbt.LegacyNbtItemStack(item).getTag());
+    private void expansions(String function, boolean tolerant) {
+        for (String path : input.expansions().keySet()) {
+            String source = "@expansions/" + path;
+            try {
+                if (scripts.hasFunction(source, function))
+                    scripts.invoke(source, function, Map.of());
+            } catch (RuntimeException error) {
+                if (!tolerant)
+                    throw new IllegalArgumentException(
+                            source + " / " + function + ": " + error.getMessage(), error);
+                plugin.getLogger().warning(source + " / " + function + ": " + error.getMessage());
             }
-            if (params.containsKey("itemTag"))
-                context.set(dev.itemloom.compat.ni.action.NiContextKeys.NBT, params.get("itemTag"));
-            if (params.get("data") instanceof Map<?, ?> data) {
-                @SuppressWarnings("unchecked")
-                Map<String, String> rolls = (Map<String, String>) data;
-                context.set(dev.itemloom.compat.ni.action.NiContextKeys.DATA, rolls);
-            }
-            if (params.get("event") instanceof org.bukkit.event.Event event)
-                context.set(dev.itemloom.compat.ni.action.NiContextKeys.EVENT, event);
         }
-        return context;
-    }
-
-    public java.util.concurrent.CompletionStage<ActionFlow.Result> runFunction(
-            String id, Object caster, Map<String, Object> params) {
-        return actions.function(id, actionContext(caster, params));
-    }
-
-    private void postGenerated(
-            LegacyItemGenerator generator,
-            org.bukkit.OfflinePlayer viewer,
-            ItemStack item,
-            Map<String, String> rolls) {
-        String id = generator.getId();
-        var step = generator.postGenerate();
-        if (step != null) {
-            Map<String, Object> params = new java.util.HashMap<>();
-            params.put("id", id);
-            params.put("item", generator);
-            params.put("itemStack", item);
-            params.put("data", rolls);
-            NiActionContext call =
-                    actionContext(viewer == null ? null : viewer.getPlayer(), params);
-            call.getGlobal().put("id", id);
-            call.getGlobal().put("item", params.get("item"));
-            actions.run(step, call);
-        }
-        item.setAmount(1);
     }
 
     public void serverEnabled() {
-        invokeExtensions("serverEnable", true);
+        evaluation(null, NiEvaluation.Mode.SECTION)
+                .scoped(
+                        () -> {
+                            expansions("serverEnable", true);
+                            return null;
+                        });
     }
 
     public void serverStopping() {
-        invokeExtensions("serverDisable", true);
-    }
-
-    private void invokeExtensions(String function, boolean tolerateErrors) {
-        for (String path : input.expansions().keySet()) {
-            String key = "@expansions/" + path;
-            if (!scripts.hasFunction(key, function)) continue;
-            try {
-                lifecycle.scoped(() -> scripts.invoke(key, function, Map.of()));
-            } catch (RuntimeException error) {
-                if (!tolerateErrors) throw error;
-                logger.log(java.util.logging.Level.WARNING, path + " / " + function, error);
-            }
-        }
+        evaluation(null, NiEvaluation.Mode.SECTION)
+                .scoped(
+                        () -> {
+                            expansions("serverDisable", true);
+                            return null;
+                        });
     }
 
     @Override
     public void close() {
         if (closed) return;
         closed = true;
-        if (maintenance != null) maintenance.close();
-        if (triggers != null) triggers.close();
-        actions.close();
-        invokeExtensions("disable", true);
-        scripts.close();
+        try {
+            if (maintenance != null) maintenance.close();
+        } finally {
+            try {
+                if (triggers != null) triggers.close();
+            } finally {
+                try {
+                    if (actions != null) actions.close();
+                } finally {
+                    try {
+                        if (scripts != null)
+                            evaluation(null, NiEvaluation.Mode.SECTION)
+                                    .scoped(
+                                            () -> {
+                                                expansions("disable", true);
+                                                return null;
+                                            });
+                    } finally {
+                        if (scripts != null) scripts.close();
+                    }
+                }
+            }
+        }
     }
 }

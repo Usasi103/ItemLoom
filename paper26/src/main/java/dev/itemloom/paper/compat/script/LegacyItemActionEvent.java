@@ -1,15 +1,11 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.Objects;
 import dev.itemloom.api.ItemActionEvent;
+import java.util.Objects;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/**
- * One Bukkit event exposes both the independent API and NI's script contract.
- * Contract derived from Neige's ItemActionEvent/BasicEvent at ca93bc4f; GPL-3.0, see NOTICE.md.
- */
 public final class LegacyItemActionEvent extends ItemActionEvent {
     private final LegacyItemInfo itemInfo;
     private final LegacyItemActionType type;

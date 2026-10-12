@@ -1,5 +1,7 @@
 package dev.itemloom.probe;
 
+import dev.itemloom.paper.runtime.DropOwnershipPolicy;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -394,15 +396,7 @@ final class ItemDropProbe {
     }
 
     private static void ownership(Checks c, Fixture f) {
-        var guard =
-                new DropOwnership(
-                        () ->
-                                new NiConfig(
-                                        Map.of(
-                                                "Messages",
-                                                Map.of("invalidOwnerMessage", "owned by {name}"),
-                                                "ItemOwner",
-                                                Map.of("messageType", "message"))));
+        var guard = new DropOwnership(() -> new DropOwnershipPolicy("owned by {name}", "message"));
         Item alice =
                 f.keep(f.catalog.drops().drop(f.at, f.stack("Alice", false, null), null).join());
         Item alsoAlice =
@@ -455,11 +449,16 @@ final class ItemDropProbe {
     }
 
     private static void listeners(Checks c, Fixture f) throws Exception {
+        var existing = ownershipListeners(f.plugin);
         try (ItemsService service =
                 new ItemsService(f.plugin, f.root, (p, s) -> null, f.root.resolve("ledger.json"))) {
             c.that(
                     service.reload(Bukkit.getConsoleSender()),
                     "service installs ownership listeners");
+            var installed = ownershipListeners(f.plugin);
+            c.that(
+                    installed.containsAll(existing) && installed.size() == existing.size() + 1,
+                    "service adds exactly its own ownership listener without replacing existing services");
             var item =
                     f.keep(
                             f.catalog
@@ -485,17 +484,21 @@ final class ItemDropProbe {
                     "picked".equals(System.getProperty(f.key)),
                     "positive control: same owner's actual pickup dispatch executes configured pick action");
             service.close();
-            var after = new EntityPickupItemEvent(ProbePlayer.create("Intruder"), item, 0);
-            // The main plugin also protects owned items; inspect registration ownership directly.
             c.that(
-                    java.util.Arrays.stream(after.getHandlers().getRegisteredListeners())
-                            .noneMatch(
-                                    listener ->
-                                            listener.getPlugin() == f.plugin
-                                                    && listener.getListener()
-                                                            instanceof DropOwnership),
+                    ownershipListeners(f.plugin).equals(existing),
                     "service close unregisters only its ownership listener");
         }
+    }
+
+    private static java.util.Set<Listener> ownershipListeners(JavaPlugin plugin) {
+        return java.util.Arrays.stream(
+                        EntityPickupItemEvent.getHandlerList().getRegisteredListeners())
+                .filter(
+                        listener ->
+                                listener.getPlugin() == plugin
+                                        && listener.getListener() instanceof DropOwnership)
+                .map(org.bukkit.plugin.RegisteredListener::getListener)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     private static void pending(Checks c, Fixture f) throws Exception {

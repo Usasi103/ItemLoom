@@ -16,6 +16,7 @@ class NiTagValuesTest {
         assertInstanceOf(Float.class, NiTagValues.decode("(Float) 7"));
         assertInstanceOf(Double.class, NiTagValues.decode("(Double) 7"));
         assertEquals("(Int) 7", NiTagValues.decode("(String) (Int) 7"));
+        assertEquals(List.of("(Int) 7"), NiTagValues.decode(List.of("(String) (Int) 7")));
         assertEquals("(Byte) 999", NiTagValues.decode("(Byte) 999"));
     }
 

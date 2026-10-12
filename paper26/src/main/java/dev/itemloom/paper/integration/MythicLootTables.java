@@ -1,7 +1,8 @@
 package dev.itemloom.paper.integration;
 
-import java.lang.reflect.InvocationTargetException;
+import dev.itemloom.paper.ItemsService;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -11,192 +12,213 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import dev.itemloom.paper.ItemsService;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
 
-/** MM5 selects native tables, but only item rewards can participate in bag consumption. */
+/** Validates a current Mythic table graph before asking its native selector for item rewards. */
 public final class MythicLootTables {
-    // ClassValue releases bindings with the optional plugin's class loader; no table/player state
-    // is cached.
     private static final ClassValue<MythicLootTables> BINDINGS =
             new ClassValue<>() {
                 @Override
                 protected MythicLootTables computeValue(Class<?> type) {
-                    try {
-                        return new MythicLootTables(type);
-                    } catch (ReflectiveOperationException failure) {
-                        throw new IllegalStateException(
-                                "Unsupported MythicMobs item table API", failure);
-                    }
+                    return new MythicLootTables(type);
                 }
             };
-    private final ClassLoader loader;
-    private final Class<?> table, drop, custom, nested, itemDrop, metadata, abstractItem;
-    private final Method amount, unwrap, generateItem, adaptItem;
-    private final Method manager,
-            findTable,
-            tableEntries,
-            entriesView,
-            nestedTable,
-            adaptEntity,
-            generateTable,
-            bagDrops;
-    private final Constructor<?> newMetadata;
+    private final Class<?> tableType;
+    private final Class<?> tableDropType;
+    private final Class<?> customType;
+    private final Class<?> itemType;
+    private final Method manager;
+    private final Method findTable;
+    private final Method tableDrops;
+    private final Method view;
+    private final Method generate;
+    private final Method selectedDrops;
+    private final Method childTable;
+    private final Method customDrop;
+    private final Method amount;
+    private final Method item;
+    private final Method adaptEntity;
+    private final Method adaptItem;
+    private final Constructor<?> metadata;
 
-    private MythicLootTables(Class<?> plugin) throws ReflectiveOperationException {
-        this.loader = plugin.getClassLoader();
-        table = type("core.drops.DropTable");
-        drop = type("core.drops.Drop");
-        custom = type("core.drops.droppables.CustomDrop");
-        nested = type("core.drops.droppables.DropTableDrop");
-        itemDrop = type("api.drops.IItemDrop");
-        metadata = type("api.drops.DropMetadata");
-        abstractItem = type("api.adapters.AbstractItemStack");
-        amount = drop.getMethod("getAmount");
-        unwrap = custom.getMethod("getDrop");
-        generateItem = itemDrop.getMethod("getDrop", metadata, double.class);
-        adaptItem = type("bukkit.BukkitAdapter").getMethod("adapt", abstractItem);
-        manager = plugin.getMethod("getDropManager");
-        findTable = manager.getReturnType().getMethod("getDropTable", String.class);
-        tableEntries = table.getMethod("getDrops");
-        entriesView = tableEntries.getReturnType().getMethod("getView");
-        nestedTable = nested.getMethod("getDropTable");
-        adaptEntity = type("bukkit.BukkitAdapter").getMethod("adapt", Entity.class);
-        newMetadata =
-                type("core.drops.DropMetadataImpl")
-                        .getConstructor(
-                                type("api.skills.SkillCaster"),
-                                type("api.adapters.AbstractEntity"),
-                                double.class);
-        generateTable = table.getMethod("generate", metadata);
-        bagDrops = generateTable.getReturnType().getMethod("getDrops");
+    private MythicLootTables(Class<?> pluginType) {
+        ClassLoader loader = pluginType.getClassLoader();
+        try {
+            tableType = load(loader, "core.drops.DropTable");
+            tableDropType = load(loader, "core.drops.droppables.DropTableDrop");
+            customType = load(loader, "core.drops.droppables.CustomDrop");
+            itemType = load(loader, "api.drops.IItemDrop");
+            Class<?> dropMetadata = load(loader, "api.drops.DropMetadata");
+            Class<?> abstractEntity = load(loader, "api.adapters.AbstractEntity");
+            Class<?> adapter = load(loader, "bukkit.BukkitAdapter");
+            manager = pluginType.getMethod("getDropManager");
+            findTable = manager.getReturnType().getMethod("getDropTable", String.class);
+            tableDrops = tableType.getMethod("getDrops");
+            view = tableDrops.getReturnType().getMethod("getView");
+            generate = tableType.getMethod("generate", dropMetadata);
+            selectedDrops = generate.getReturnType().getMethod("getDrops");
+            childTable = tableDropType.getMethod("getDropTable");
+            customDrop = customType.getMethod("getDrop");
+            amount = load(loader, "core.drops.Drop").getMethod("getAmount");
+            item = itemType.getMethod("getDrop", dropMetadata, double.class);
+            adaptEntity = adapter.getMethod("adapt", Entity.class);
+            adaptItem = adapter.getMethod("adapt", load(loader, "api.adapters.AbstractItemStack"));
+            metadata =
+                    load(loader, "core.drops.DropMetadataImpl")
+                            .getConstructor(
+                                    load(loader, "api.skills.SkillCaster"),
+                                    abstractEntity,
+                                    double.class);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Unsupported MythicMobs 5 loot table API", failure);
+        }
     }
 
-    public static List<ItemStack> generate(String id, Player player) {
+    private static Class<?> load(ClassLoader loader, String suffix) throws ClassNotFoundException {
+        return loader.loadClass("io.lumine.mythic." + suffix);
+    }
+
+    public static List<ItemStack> generate(String name, Player player) {
         ItemsService.requireThread();
-        var plugin = Bukkit.getPluginManager().getPlugin("MythicMobs");
+        Plugin plugin = Bukkit.getPluginManager().getPlugin("MythicMobs");
         if (plugin == null || !plugin.isEnabled())
-            throw new IllegalStateException("MythicMobs is unavailable");
-        try {
-            var api = BINDINGS.get(plugin.getClass());
-            Object manager = call(api.manager, plugin);
-            Object table =
-                    ((Optional<?>) call(api.findTable, manager, id))
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalArgumentException(
-                                                    "Unknown MythicMobs drop table: " + id));
-            api.new Validation().validate(table, 0);
-            Object entity = call(api.adaptEntity, null, player);
-            Object meta = api.newMetadata.newInstance(null, entity, 1.0);
-            Object bag = call(api.generateTable, table, meta);
-            Collection<?> drops = (Collection<?>) call(api.bagDrops, bag);
-            if (drops.size() > 256)
-                throw new IllegalArgumentException("Mythic bag exceeds 256 reward entries");
-            // Inspect every selected entry before invoking a generator. Never call LootBag.give,
-            // which would also execute commands, currency and experience before bag consumption.
-            List<Reward> rewards = new ArrayList<>();
-            for (Object drop : drops) {
-                Object generator = api.item(drop);
-                double count = (double) call(api.amount, drop);
-                if (!Double.isFinite(count) || count < 0 || count > 4096)
-                    throw new IllegalArgumentException("Invalid Mythic reward amount");
-                rewards.add(new Reward(generator, count));
-            }
-            List<ItemStack> result = new ArrayList<>();
-            for (Reward reward : rewards) {
-                Object item = call(api.generateItem, reward.generator(), meta, reward.amount());
-                if (item == null)
-                    throw new IllegalStateException("Mythic reward generator returned null");
-                result.add(((ItemStack) call(api.adaptItem, null, item)).clone());
-            }
-            return result;
-        } catch (ReflectiveOperationException failure) {
-            throw new IllegalStateException("Unsupported MythicMobs item table API", failure);
+            throw new IllegalArgumentException("MythicMobs is not enabled");
+        return BINDINGS.get(plugin.getClass()).collect(plugin, name, player);
+    }
+
+    private List<ItemStack> collect(Plugin plugin, String name, Player player) {
+        Object table =
+                ((Optional<?>) call(findTable, call(manager, plugin), name))
+                        .orElseThrow(
+                                () ->
+                                        new IllegalArgumentException(
+                                                "Unknown MythicMobs drop table: " + name));
+        new Validation().visit(table, 0);
+        Object context = metadata(player);
+        Object bag = call(generate, table, context);
+        Collection<?> selected = collection(call(selectedDrops, bag));
+        if (selected.size() > 256)
+            throw new IllegalArgumentException("Too many selected MythicMobs rewards");
+        var rewards = new ArrayList<Reward>();
+        for (Object drop : selected) {
+            if (rewards.size() >= 256)
+                throw new IllegalArgumentException("Too many selected MythicMobs rewards");
+            Object generator = generator(drop);
+            double count = ((Number) call(amount, drop)).doubleValue();
+            if (!Double.isFinite(count) || count < 0 || count > 4096)
+                throw new IllegalArgumentException("Invalid MythicMobs reward amount: " + count);
+            rewards.add(new Reward(generator, count));
         }
+        var result = new ArrayList<ItemStack>(rewards.size());
+        for (Reward reward : rewards) {
+            Object generated = call(item, reward.generator, context, reward.amount);
+            if (generated == null)
+                throw new IllegalArgumentException("MythicMobs item reward returned null");
+            ItemStack value = (ItemStack) call(adaptItem, null, generated);
+            if (value == null)
+                throw new IllegalArgumentException("MythicMobs item adaptation returned null");
+            result.add(value.clone());
+        }
+        return result;
     }
 
     private record Reward(Object generator, double amount) {}
 
-    private Object item(Object value) {
-        Object provider =
-                custom.isInstance(value)
-                        ? ((Optional<?>) call(unwrap, value))
-                                .orElseThrow(
-                                        () ->
-                                                new IllegalArgumentException(
-                                                        "Unloaded Mythic custom drop"))
-                        : value;
-        if (!itemDrop.isInstance(provider))
-            throw new IllegalArgumentException(
-                    "Loot bags require item-only Mythic tables: " + provider.getClass().getName());
-        return provider;
-    }
+    private record Shape(int height, int work) {}
 
-    /** Recheck each request: MM or another plugin can mutate an existing table without replacing its identity. */
     private final class Validation {
-        private record Shape(int height, int expandedWork) {}
-
+        private final Map<Object, Shape> checked = new IdentityHashMap<>();
         private final Set<Object> path = Collections.newSetFromMap(new IdentityHashMap<>());
-        private final Map<Object, Shape> complete = new IdentityHashMap<>();
-        private int remaining = 4096;
+        private int inspections;
 
-        private Shape validate(Object value, int depth) {
-            if (value == null || depth > 32 || path.contains(value))
-                throw new IllegalArgumentException("Cyclic or excessive Mythic table nesting");
-            Shape known = complete.get(value);
-            if (known != null) {
-                if (depth + known.height() > 32)
-                    throw new IllegalArgumentException("Excessive Mythic table nesting");
-                return known;
+        Shape visit(Object table, int depth) {
+            if (!tableType.isInstance(table))
+                throw new IllegalArgumentException("Invalid MythicMobs nested table");
+            if (depth > 32) throw new IllegalArgumentException("MythicMobs table depth exceeds 32");
+            if (path.contains(table))
+                throw new IllegalArgumentException("Cyclic MythicMobs drop table");
+            Shape previous = checked.get(table);
+            if (previous != null) {
+                if (depth + previous.height > 32)
+                    throw new IllegalArgumentException("MythicMobs table depth exceeds 32");
+                return previous;
             }
-            path.add(value);
+            path.add(table);
             try {
-                Collection<?> entries =
-                        (Collection<?>) call(entriesView, call(tableEntries, value));
-                if (entries.size() > 256)
-                    throw new IllegalArgumentException("Mythic table exceeds 256 entries");
-                remaining -= 1 + entries.size();
-                if (remaining < 0)
+                Collection<?> drops = collection(call(view, call(tableDrops, table)));
+                if (drops.size() > 256)
                     throw new IllegalArgumentException(
-                            "Mythic table validation exceeds 4096 visits");
-                int height = 0, expandedWork = 1 + entries.size();
-                for (Object entry : entries) {
-                    if (nested.isInstance(entry)) {
-                        Shape child = validate(call(nestedTable, entry), depth + 1);
-                        height = Math.max(height, 1 + child.height());
-                        expandedWork += child.expandedWork();
-                        if (expandedWork > 4096)
-                            throw new IllegalArgumentException(
-                                    "Mythic table expansion exceeds 4096 visits");
-                    } else item(entry);
+                            "MythicMobs table has more than 256 entries");
+                int height = 0;
+                int work = 0;
+                int entries = 0;
+                for (Object drop : drops) {
+                    if (++entries > 256 || ++inspections > 4096)
+                        throw new IllegalArgumentException(
+                                "MythicMobs table inspection budget exceeded");
+                    work++;
+                    if (tableDropType.isInstance(drop)) {
+                        Shape nested = visit(call(childTable, drop), depth + 1);
+                        height = Math.max(height, nested.height + 1);
+                        work += nested.work;
+                    } else {
+                        generator(drop);
+                    }
+                    if (work > 4096)
+                        throw new IllegalArgumentException(
+                                "MythicMobs table expansion budget exceeded");
                 }
-                Shape shape = new Shape(height, expandedWork);
-                complete.put(value, shape);
+                Shape shape = new Shape(height, work);
+                checked.put(table, shape);
                 return shape;
             } finally {
-                path.remove(value);
+                path.remove(table);
             }
         }
     }
 
-    private Class<?> type(String name) throws ClassNotFoundException {
-        return loader.loadClass("io.lumine.mythic." + name);
+    private Object generator(Object drop) {
+        if (itemType.isInstance(drop)) return drop;
+        if (customType.isInstance(drop)) {
+            Object provided = ((Optional<?>) call(customDrop, drop)).orElse(null);
+            if (itemType.isInstance(provided)) return provided;
+        }
+        throw new IllegalArgumentException("MythicMobs table contains a non-item reward");
     }
 
-    private static Object call(Method method, Object target, Object... arguments) {
+    private Object metadata(Player player) {
         try {
-            return method.invoke(target, arguments);
-        } catch (InvocationTargetException error) {
-            if (error.getCause() instanceof RuntimeException runtime) throw runtime;
-            if (error.getCause() instanceof Error fatal) throw fatal;
-            throw new IllegalStateException(
-                    "Mythic table call failed: " + method.getName(), error.getCause());
-        } catch (IllegalAccessException error) {
-            throw new IllegalStateException("Mythic table API inaccessible", error);
+            return metadata.newInstance(
+                    null, player == null ? null : call(adaptEntity, null, player), 1.0);
+        } catch (InvocationTargetException wrapped) {
+            throw propagate(wrapped.getCause());
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("MythicMobs drop metadata is inaccessible", failure);
         }
+    }
+
+    private static Collection<?> collection(Object value) {
+        if (value instanceof Collection<?> collection) return collection;
+        throw new IllegalStateException("Unsupported MythicMobs drop collection");
+    }
+
+    private static Object call(Method method, Object receiver, Object... arguments) {
+        try {
+            return method.invoke(receiver, arguments);
+        } catch (InvocationTargetException wrapped) {
+            throw propagate(wrapped.getCause());
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("MythicMobs table API is inaccessible", failure);
+        }
+    }
+
+    private static RuntimeException propagate(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) return runtime;
+        if (failure instanceof Error error) throw error;
+        return new IllegalStateException("MythicMobs table API failed", failure);
     }
 }

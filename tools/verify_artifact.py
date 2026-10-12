@@ -1,6 +1,7 @@
 """Audit the actual candidate JAR; output belongs outside the deployment server."""
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
@@ -18,6 +19,8 @@ def main():
     dependency_manifest = json.loads((project / "provenance/runtime-dependencies.json").read_text(encoding="utf-8"))
     with ZipFile(args.jar) as jar:
         names = jar.namelist()
+        violations.extend(f"Duplicate archive entry: {name}" for name, count in Counter(names).items()
+                          if count > 1)
         classes = [name for name in names if name.endswith(".class")]
         if 'compat-ni/action-library.js' in names:
             violations.append('Obsolete upstream action helper implementation is still packaged')
@@ -65,9 +68,34 @@ def main():
             violations.append('Missing relocated ItemBridge')
         if any(name.startswith('cn/gtemc/itembridge/') for name in names):
             violations.append('Unrelocated ItemBridge')
-        for notice in ("LICENSE", "NOTICE.md", "META-INF/licenses/itembridge-MIT.txt",
-                       "META-INF/licenses/itembridge-modifications.md",
-                       "META-INF/licenses/runtime-dependencies.json",
+        reviewed_texts = {
+            "LICENSE": "LICENSE",
+            "NOTICE.md": "NOTICE.md",
+            "META-INF/licenses/itembridge-MIT.txt": "vendor/itembridge/LICENSE",
+            "META-INF/licenses/itembridge-modifications.md": "vendor/itembridge/README.md",
+        }
+        for name, source in reviewed_texts.items():
+            if name not in names:
+                violations.append(f"Missing source license/provenance notice: {name}")
+                continue
+            expected = (project / source).read_text(encoding="utf-8")
+            try:
+                actual = jar.read(name).decode("utf-8").replace("\r\n", "\n")
+            except UnicodeDecodeError:
+                violations.append(f"Invalid UTF-8 source license/provenance notice: {name}")
+                continue
+            # A terminal newline may be added when a dependency packages its license.
+            # All notice wording and interior whitespace must still match.
+            if actual.rstrip("\n") != expected.rstrip("\n"):
+                violations.append(f"Source license/provenance notice content differs: {name}")
+        version = next(line.partition("=")[2].strip() for line in
+                       (project / "gradle.properties").read_text(encoding="utf-8").splitlines()
+                       if line.startswith("version="))
+        expected_descriptor = (project / "paper26/src/main/resources/plugin.yml").read_text(encoding="utf-8")
+        expected_descriptor = expected_descriptor.replace("${version}", version)
+        if descriptor.replace("\r\n", "\n") != expected_descriptor:
+            violations.append("Plugin descriptor differs from the reviewed source and version")
+        for notice in ("META-INF/licenses/runtime-dependencies.json",
                        "compat-sx/legacy-materials-26.2.tsv"):
             if notice not in names:
                 violations.append(f"Missing source license/provenance notice: {notice}")

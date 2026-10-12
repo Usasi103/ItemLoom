@@ -1,188 +1,163 @@
 package dev.itemloom.paper.compat;
 
-import com.google.gson.JsonParser;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.function.Supplier;
-import dev.itemloom.compat.ni.action.NiContextKeys;
-import dev.itemloom.paper.ItemsService;
+import com.google.gson.*;
+import dev.itemloom.compat.ni.action.*;
+import dev.itemloom.core.ItemIdentity;
+import dev.itemloom.paper.compat.nbt.LegacyNbt;
 import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
-import org.bukkit.OfflinePlayer;
+import java.util.*;
+import java.util.function.Supplier;
+import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/** NI's placeholder vocabulary, independent of the optional PlaceholderAPI class loader.
- * Requests touching Bukkit or scripts must be dispatched on the server thread by the caller. */
 public final class NiPlaceholderRequests {
-    private record Request(UUID viewer, String parameters) {}
+    private record Request(UUID player, String parameters) {}
 
     private final Supplier<NiCatalog> catalog;
-    private final ThreadLocal<Set<Request>> path = new ThreadLocal<>();
+    private final ThreadLocal<Set<Request>> active = ThreadLocal.withInitial(HashSet::new);
 
     public NiPlaceholderRequests(Supplier<NiCatalog> catalog) {
-        this.catalog = Objects.requireNonNull(catalog);
+        this.catalog = catalog;
     }
 
-    public String request(OfflinePlayer viewer, String parameters) {
-        // Reject before acquiring a script lock or inspecting a live player/inventory.
-        ItemsService.requireThread();
-        NiCatalog current = catalog.get();
-        if (current == null || !current.active()) return "";
-        Request request = new Request(viewer == null ? null : viewer.getUniqueId(), parameters);
-        Set<Request> calls = path.get();
-        if (calls == null) {
-            calls = new HashSet<>();
-            path.set(calls);
-        }
-        if (calls.size() >= 32 || !calls.add(request)) return "";
+    public String request(OfflinePlayer player, String parameters) {
+        if (Bukkit.getServer() != null && !Bukkit.isPrimaryThread())
+            throw new IllegalStateException("NI placeholders require the main thread");
+        NiCatalog owner = catalog.get();
+        if (owner == null || !owner.active()) return "";
+        Request request = new Request(player == null ? null : player.getUniqueId(), parameters);
+        Set<Request> path = active.get();
+        if (path.size() >= 32 || !path.add(request)) return "";
         try {
-            return resolve(current, viewer, parameters);
+            return resolve(owner, player, parameters);
         } finally {
-            calls.remove(request);
-            if (calls.isEmpty()) path.remove();
+            path.remove(request);
+            if (path.isEmpty()) active.remove();
         }
     }
 
-    private String resolve(NiCatalog current, OfflinePlayer viewer, String parameters) {
-        String[] head = parameters.split("_", 2);
-        String kind = head[0].toLowerCase(Locale.ROOT);
+    private String resolve(NiCatalog owner, OfflinePlayer offline, String parameters) {
+        int split = parameters.indexOf('_');
+        String kind =
+                (split < 0 ? parameters : parameters.substring(0, split)).toLowerCase(Locale.ROOT);
+        String content = split < 0 ? null : parameters.substring(split + 1);
+        Player player = offline == null ? null : offline.getPlayer();
         if (kind.equals("parse")) {
-            if (head.length < 2) return "";
-            var context = current.actionContext(viewer, null);
+            if (content == null) return "";
+            NiActionContext context = owner.actionContext(offline, null);
             context.set(NiContextKeys.PAPI_ENVIRONMENT, null);
-            return context.parse(head[1]);
+            return context.parse(content);
         }
         if (kind.equals("amount")) {
-            if (!(viewer instanceof Player player) || head.length < 2) return "0";
             int total = 0;
-            for (ItemStack item : player.getInventory().getContents())
-                if (head[1].equals(NiItemNodes.itemId(item))) total += item.getAmount();
-            return Integer.toString(total);
+            if (player != null && content != null)
+                for (ItemStack item : player.getInventory().getContents())
+                    if (content.equals(NiItemNodes.itemId(item))) total += item.getAmount();
+            return String.valueOf(total);
         }
-        if (kind.equals("count")) {
-            if (!(viewer instanceof Player player) || head.length < 2) return "false";
-            return Boolean.toString(
-                    InventoryRequirements.fulfilled(
-                            head[1],
-                            java.util.Arrays.asList(player.getInventory().getContents()),
-                            NiItemNodes::itemId,
-                            ItemStack::getAmount));
-        }
-        if ((!kind.equals("data") && !kind.equals("nbt"))
-                || !(viewer instanceof Player player)
-                || head.length < 2) return "";
-        String[] args = head[1].split("_", 3);
-        if (args.length != 3) return "";
-        ItemStack item = slot(player, args[1].toLowerCase(Locale.ROOT));
+        if (kind.equals("count"))
+            return String.valueOf(
+                    player != null
+                            && content != null
+                            && InventoryRequirements.fulfilled(
+                                    content,
+                                    Arrays.asList(player.getInventory().getContents()),
+                                    NiItemNodes::itemId,
+                                    ItemStack::getAmount));
+        if (player == null || content == null || !Set.of("data", "nbt").contains(kind)) return "";
+        String[] parts = content.split("_", 3);
+        if (parts.length != 3 || parts[1].isEmpty()) return "";
+        ItemStack item = slot(player, parts[1]);
         if (item == null || item.isEmpty()) return "";
-        String operation = args[0].toLowerCase(Locale.ROOT), content = args[2];
+        String operation = parts[0].toLowerCase(Locale.ROOT), value = parts[2];
         if (kind.equals("data")) {
-            var identity = NiItemNodes.identity(item);
+            ItemIdentity identity = NiItemNodes.identity(item);
             if (identity == null) return "";
-            Map<String, String> data = identity.rolls();
+            Map<String, String> rolls = identity.rolls();
             return switch (operation) {
-                case "get" -> data.getOrDefault(content, "");
-                case "has" -> Boolean.toString(data.containsKey(content));
+                case "get" -> rolls.getOrDefault(value, "");
+                case "has" -> String.valueOf(rolls.containsKey(value));
                 case "check" ->
-                        Boolean.toString(
-                                expected(content).entrySet().stream()
+                        String.valueOf(
+                                expected(value).entrySet().stream()
                                         .allMatch(
                                                 entry ->
                                                         entry.getValue() == null
-                                                                ? !data.containsKey(entry.getKey())
+                                                                ? !rolls.containsKey(entry.getKey())
                                                                 : entry.getValue()
                                                                         .equals(
-                                                                                data.get(
+                                                                                rolls.get(
                                                                                         entry
                                                                                                 .getKey()))));
-                case "eval" -> {
-                    if (!current.input().settings().bool("Papi.enableJs", false)) yield "";
-                    Map<String, Object> bindings = new HashMap<>();
-                    bindings.put("itemStack", item);
-                    bindings.put("itemTag", new LegacyNbtItemStack(item).getOrCreateTag());
-                    bindings.put("id", identity.id());
-                    bindings.put("data", new HashMap<>(data));
-                    yield Objects.toString(
-                            current.actionContext(player, bindings).evaluate(content), "");
-                }
+                case "eval" -> evaluate(owner, player, item, identity, value);
                 default -> "";
             };
         }
-        var tag = new LegacyNbtItemStack(item).getOrCreateTag();
+        LegacyNbt.Compound nbt = new LegacyNbtItemStack(item).getOrCreateTag();
         return switch (operation) {
-            case "get" -> Objects.toString(tag.getDeepStringOrNull(content), "");
-            case "has" -> Boolean.toString(tag.getDeep(content) != null);
-            // NI deliberately gives JSON null the opposite meaning in data_check and nbt_check.
+            case "get" -> Objects.toString(nbt.getDeepStringOrNull(value), "");
+            case "has" -> String.valueOf(nbt.getDeep(value) != null);
             case "check" ->
-                    Boolean.toString(
-                            expected(content).entrySet().stream()
+                    String.valueOf(
+                            expected(value).entrySet().stream()
                                     .allMatch(
                                             entry ->
                                                     entry.getValue() == null
-                                                            ? tag.getDeep(entry.getKey()) != null
+                                                            ? nbt.getDeep(entry.getKey()) != null
                                                             : entry.getValue()
                                                                     .equals(
-                                                                            tag.getDeepStringOrNull(
+                                                                            nbt.getDeepStringOrNull(
                                                                                     entry
                                                                                             .getKey()))));
-            case "eval" ->
-                    current.input().settings().bool("Papi.enableJs", false)
-                            ? Objects.toString(
-                                    current.actionContext(
-                                                    player,
-                                                    Map.of("itemStack", item, "itemTag", tag))
-                                            .evaluate(content),
-                                    "")
-                            : "";
+            case "eval" -> evaluate(owner, player, item, null, value);
             default -> "";
         };
     }
 
+    private static String evaluate(
+            NiCatalog owner, Player player, ItemStack item, ItemIdentity identity, String source) {
+        if (!owner.input().settings().bool("Papi.enableJs", false)) return "";
+        Map<String, Object> values = new HashMap<>();
+        values.put("itemStack", item);
+        values.put("itemTag", new LegacyNbtItemStack(item).getOrCreateTag());
+        if (identity != null) {
+            values.put("id", identity.id());
+            values.put("data", new HashMap<>(identity.rolls()));
+        }
+        Object result = owner.actionContext(player, values).evaluate(source);
+        return result == null ? "" : result.toString();
+    }
+
     private static ItemStack slot(Player player, String name) {
-        var inventory = player.getInventory();
+        name = name.toLowerCase(Locale.ROOT);
+        if (name.equals("hand")) return player.getInventory().getItemInMainHand();
         int slot;
         switch (name) {
-            case "hand":
-                return inventory.getItemInMainHand();
-            case "offhand":
-                slot = 40;
-                break;
-            case "head":
-                slot = 39;
-                break;
-            case "chest":
-                slot = 38;
-                break;
-            case "legs":
-                slot = 37;
-                break;
-            case "feet":
-                slot = 36;
-                break;
-            default:
+            case "offhand" -> slot = 40;
+            case "head" -> slot = 39;
+            case "chest" -> slot = 38;
+            case "legs" -> slot = 37;
+            case "feet" -> slot = 36;
+            default -> {
                 try {
                     slot = Integer.parseInt(name);
-                } catch (NumberFormatException invalid) {
+                } catch (NumberFormatException error) {
                     return null;
                 }
+            }
         }
-        // PlayerInventory's supported numeric slots are 0..40; never leak an NMS bounds error.
-        return slot < 0 || slot > 40 ? null : inventory.getItem(slot);
+        return slot < 0 || slot > 40 ? null : player.getInventory().getItem(slot);
     }
 
     private static Map<String, String> expected(String json) {
-        Map<String, String> result = new HashMap<>();
+        Map<String, String> result = new LinkedHashMap<>();
         JsonParser.parseString(json)
                 .getAsJsonObject()
                 .entrySet()
                 .forEach(
                         entry -> {
-                            var value = entry.getValue();
+                            JsonElement value = entry.getValue();
                             result.put(
                                     entry.getKey(),
                                     value.isJsonNull()

@@ -1,4 +1,4 @@
-"""Read-only compatibility census; evidence is not a claim of runtime support."""
+"""Read-only NI/SX configuration census; never reads upstream implementation source."""
 from __future__ import annotations
 
 import argparse
@@ -27,16 +27,24 @@ def walk(value, path=""):
             yield from walk(child, f"{path}[{index}]")
 
 
-def config_inventory(root: Path) -> dict:
+def config_inventory(root: Path, language="auto") -> dict:
     counts, fields, types, inline = Counter(), Counter(), Counter(), Counter()
     definitions, files, imports, errors = [], [], [], []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in (".yml", ".yaml", ".js"):
             continue
         relative = path.relative_to(root).as_posix()
-        category = relative.split("/")[0] if "/" in relative else "root"
+        parts = relative.split("/")
+        syntax = language
+        if parts[0] == "SX-Item":
+            syntax, parts = "sx", parts[1:]
+        elif syntax == "auto":
+            syntax = "sx" if parts[0] in ("Item", "RandomString") or (root / "Item").is_dir() else "ni"
+        if syntax == "sx" and any(part.startswith("NoLoad") for part in parts):
+            continue
+        category = parts[0] if len(parts) > 1 else "root"
         source = text(path)
-        counts[category] += 1
+        counts[f"{syntax}/{category}"] += 1
         files.append({"file": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
         for match in re.finditer(r"(?:Packages\.)?(pers\.neige\.[\w.$]+)", source):
             # May be a comment, qualified member, or an actual import: retain evidence.
@@ -49,10 +57,16 @@ def config_inventory(root: Path) -> dict:
         except yaml.YAMLError as error:
             errors.append({"file": relative, "error": str(error)})
             continue
-        if category == "Items" and isinstance(data, dict):
+        if category == ("Item" if syntax == "sx" else "Items") and isinstance(data, dict):
             for identifier, definition in data.items():
+                if syntax == "sx" and str(identifier).startswith("NoLoad"):
+                    continue
+                if isinstance(definition, dict) or (syntax == "sx" and isinstance(definition, str)):
+                    row = {"id": str(identifier), "file": relative, "format": syntax}
+                    if isinstance(definition, str):
+                        row["alias"] = definition
+                    definitions.append(row)
                 if isinstance(definition, dict):
-                    definitions.append({"id": str(identifier), "file": relative})
                     fields.update(map(str, definition.keys()))
         for node, value in walk(data):
             if isinstance(value, dict) and isinstance(value.get("type"), str):
@@ -65,48 +79,25 @@ def config_inventory(root: Path) -> dict:
             "files": files, "java_references": imports, "parse_errors": errors}
 
 
-def source_inventory(root: Path) -> dict:
-    parsers = {}
-    for relative in ("action/node/impl", "section/impl"):
-        found = []
-        base = root / "src/main/java/pers/neige/neigeitems" / relative
-        for path in sorted(base.glob("*.java")):
-            source = text(path)
-            ids = re.findall(r"String getId\(\)\s*\{\s*return\s+\"([^\"]+)\"", source)
-            for identifier in ids:
-                found.append({"id": identifier, "file": path.relative_to(root).as_posix()})
-        parsers[relative] = found
-    base = root / "src/main/java/pers/neige/neigeitems"
-    manager = text(base / "manager/BaseActionManager.java")
-    actions = []
-    for match in re.finditer(r'(?:addConsumer|addFunction|addAction)\(\s*("[^"]+"|Arrays\.asList\([^)]*\))', manager):
-        actions.extend(re.findall(r'"([^"]+)"', match.group(1)))
-    editors = re.findall(r'(?:addItemEditor|addBasicItemEditor)\(\s*"([^"]+)"',
-                         text(base / "manager/ItemEditorManager.java"))
-    return {"parsers": parsers, "actions": actions, "editors": editors,
-            "action_implementations": [p.stem for p in sorted((base / "action/impl").glob("*.java"))],
-            "note": "Lexical inventory only; dynamic registrations and reflection need manual review."}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reference", type=Path, required=True)
-    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--config", type=Path, action="append", required=True)
+    parser.add_argument("--format", choices=("auto", "ni", "sx"), default="auto")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     output = args.output.resolve()
-    for source in (args.reference.resolve(), args.config.resolve()):
-        if output.is_relative_to(source):
-            raise SystemExit("Report output must be outside the read-only inputs")
-    report = {"source": source_inventory(args.reference),
-              "shipped": config_inventory(args.reference / "src/main/resources"),
-              "server": config_inventory(args.config)}
+    if any(output.is_relative_to(path.resolve()) for path in args.config):
+        raise SystemExit("Report output must be outside the read-only inputs")
+    for path in args.config:
+        if not path.is_dir():
+            raise SystemExit(f"Configuration root is not a directory: {path}")
+    report = {"schema_version": 2,
+              "note": "Configuration-only census; not a runtime-support test or authorship proof. Scripts are not executed.",
+              "inputs": [config_inventory(path.resolve(), args.format) for path in args.config]}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({k: {n: v[n] for n in ("counts", "item_count", "item_fields", "configured_types", "inline_nodes", "parse_errors")}
-                      for k, v in report.items() if k != "source"}, ensure_ascii=False, indent=2))
-    print("Source parser counts:", {k: len(v) for k, v in report["source"]["parsers"].items()})
-    print("Actions:", len(report["source"]["actions"]), "Editors:", len(report["source"]["editors"]))
+    print(json.dumps([{key: value[key] for key in ("counts", "item_count", "parse_errors")}
+                      for value in report["inputs"]], ensure_ascii=False, indent=2))
     print("Report:", output)
 
 

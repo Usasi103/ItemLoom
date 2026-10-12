@@ -1,15 +1,11 @@
 package dev.itemloom.compat.ni;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.function.Supplier;
 import dev.itemloom.core.GenerationContext;
+import java.util.*;
+import java.util.function.*;
+import org.bukkit.inventory.ItemStack;
 
-/** Per-call language context; reusable definitions and engines hold none of this mutable state. */
 public final class NiEvaluation {
-    private static final ThreadLocal<NiEvaluation> CURRENT = new ThreadLocal<>();
-
     public enum Mode {
         ACTION,
         SECTION
@@ -23,10 +19,10 @@ public final class NiEvaluation {
         default String legacyItemValue(
                 String key,
                 String parameters,
-                org.bukkit.inventory.ItemStack item,
+                ItemStack item,
                 Object nbt,
                 Map<String, String> rolls) {
-            throw new UnsupportedOperationException("This evaluation has no item host");
+            throw new UnsupportedOperationException();
         }
 
         void check(Object actions, NiEvaluation evaluation, String value);
@@ -42,6 +38,7 @@ public final class NiEvaluation {
         }
     }
 
+    private static final ThreadLocal<NiEvaluation> CURRENT = new ThreadLocal<>();
     private final GenerationContext generation;
     private final NiConfig sections;
     private final Object player;
@@ -49,8 +46,8 @@ public final class NiEvaluation {
     private final NiNodes nodes;
     private final NiScripts scripts;
     private final Host host;
-    private final boolean cacheEnabled;
-    private Map<String, Object> actionCache;
+    private final Map<String, Object> actionCache;
+    private final boolean caching;
 
     public NiEvaluation(
             GenerationContext generation,
@@ -60,7 +57,7 @@ public final class NiEvaluation {
             NiNodes nodes,
             NiScripts scripts,
             Host host) {
-        this(generation, sections, player, mode, nodes, scripts, host, true);
+        this(generation, sections, player, mode, nodes, scripts, host, null, true);
     }
 
     private NiEvaluation(
@@ -71,7 +68,8 @@ public final class NiEvaluation {
             NiNodes nodes,
             NiScripts scripts,
             Host host,
-            boolean cacheEnabled) {
+            Map<String, Object> actionCache,
+            boolean caching) {
         this.generation = generation;
         this.sections = sections == null ? new NiConfig(Map.of()) : sections;
         this.player = player;
@@ -79,7 +77,8 @@ public final class NiEvaluation {
         this.nodes = nodes;
         this.scripts = scripts;
         this.host = host;
-        this.cacheEnabled = cacheEnabled;
+        this.actionCache = actionCache;
+        this.caching = caching;
     }
 
     public GenerationContext generation() {
@@ -110,12 +109,12 @@ public final class NiEvaluation {
         if (host != null) host.warning(message);
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public Map<String, String> legacyCache() {
-        return cacheEnabled ? (Map) cache() : null;
+        return caching ? (Map) cache() : null;
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public Map<String, Object> cache() {
         return actionCache == null ? (Map) generation.rolls() : actionCache;
     }
@@ -129,29 +128,22 @@ public final class NiEvaluation {
     }
 
     private String resolve(String expression) {
-        int delimiter = expression.indexOf("::");
-        if (delimiter >= 0)
+        int separator = expression.indexOf("::");
+        if (separator >= 0)
             return nodes.inline(
-                    expression.substring(0, delimiter), expression.substring(delimiter + 2), this);
-        if (actionCache != null && actionCache.containsKey(expression))
-            return String.valueOf(actionCache.get(expression));
-        if (actionCache == null && generation.rolls().containsKey(expression))
-            return String.valueOf(generation.rolls().get(expression));
+                    expression.substring(0, separator), expression.substring(separator + 2), this);
+        if (cache().containsKey(expression)) return String.valueOf(cache().get(expression));
         if (sections.contains(expression)) {
             String result =
                     generation.resolve(
-                            expression,
-                            () -> uncached(expression),
-                            cacheEnabled && actionCache == null);
+                            expression, () -> uncached(expression), caching && actionCache == null);
             if (actionCache != null && result != null) actionCache.put(expression, result);
             return result;
         }
         if (expression.startsWith("#")) {
             try {
-                int rgb = Integer.parseInt(expression.substring(1), 16);
-                return NiTextNodes.color(rgb);
+                return NiTextNodes.color(Integer.parseInt(expression.substring(1), 16));
             } catch (NumberFormatException ignored) {
-                return null;
             }
         }
         return null;
@@ -159,9 +151,7 @@ public final class NiEvaluation {
 
     public static NiEvaluation current() {
         NiEvaluation value = CURRENT.get();
-        if (value == null)
-            throw new IllegalStateException(
-                    "Legacy script node call requires an active item evaluation");
+        if (value == null) throw new IllegalStateException("No active evaluation");
         return value;
     }
 
@@ -177,13 +167,13 @@ public final class NiEvaluation {
     }
 
     public NiEvaluation legacyContext(Map<String, String> cache, Object player, NiConfig sections) {
-        GenerationContext child =
+        GenerationContext rolls =
                 cache == generation.rolls()
                         ? generation
                         : new GenerationContext(
                                 cache == null ? Map.of() : cache, generation.random());
         return new NiEvaluation(
-                child, sections, player, Mode.SECTION, nodes, scripts, host, cache != null);
+                rolls, sections, player, Mode.SECTION, nodes, scripts, host, null, cache != null);
     }
 
     public String configured(NiConfig config) {
@@ -191,30 +181,23 @@ public final class NiEvaluation {
     }
 
     public String uncached(String name) {
-        NiConfig node = sections.section(name);
-        return node == null ? text(sections.string(name)) : nodes.configured(node, this);
+        NiConfig config = sections.section(name);
+        return config == null ? text(sections.string(name)) : configured(config);
     }
 
     public NiEvaluation withMode(Mode next) {
-        NiEvaluation result =
-                new NiEvaluation(
-                        generation, sections, player, next, nodes, scripts, host, cacheEnabled);
-        result.actionCache = actionCache;
-        return result;
+        return new NiEvaluation(
+                generation, sections, player, next, nodes, scripts, host, actionCache, caching);
     }
 
     public NiEvaluation withActionCache(Map<String, Object> cache) {
-        NiEvaluation result = withMode(Mode.ACTION);
-        result.actionCache = cache;
-        return result;
+        return new NiEvaluation(
+                generation, sections, player, Mode.ACTION, nodes, scripts, host, cache, caching);
     }
 
     public NiEvaluation withSections(NiConfig sections) {
-        NiEvaluation result =
-                new NiEvaluation(
-                        generation, sections, player, mode, nodes, scripts, host, cacheEnabled);
-        result.actionCache = actionCache;
-        return result;
+        return new NiEvaluation(
+                generation, sections, player, mode, nodes, scripts, host, actionCache, caching);
     }
 
     public NiEvaluation fresh() {
@@ -240,12 +223,12 @@ public final class NiEvaluation {
     }
 
     public Map<String, Object> bindings() {
-        Map<String, Object> values = new HashMap<>();
+        Map<String, Object> result = new HashMap<>();
+        result.put("vars", (Function<String, String>) this::text);
         if (player != null) {
-            values.put("player", player);
-            values.put("papi", (Function<String, String>) input -> host.placeholder(player, input));
+            result.put("player", player);
+            result.put("papi", (Function<String, String>) value -> host.placeholder(player, value));
         }
-        values.put("vars", (Function<String, String>) this::text);
-        return values;
+        return result;
     }
 }

@@ -1,60 +1,25 @@
 package dev.itemloom.paper.compat.nbt;
 
 import dev.itemloom.paper.compat.script.EscapedPath;
-
-import java.util.AbstractList;
-import java.util.AbstractMap;
-import java.util.AbstractSet;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.function.BiConsumer;
-import java.util.function.Function;
-import net.minecraft.nbt.ByteArrayTag;
-import net.minecraft.nbt.ByteTag;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.DoubleTag;
-import net.minecraft.nbt.EndTag;
-import net.minecraft.nbt.FloatTag;
-import net.minecraft.nbt.IntArrayTag;
-import net.minecraft.nbt.IntTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.LongArrayTag;
-import net.minecraft.nbt.LongTag;
-import net.minecraft.nbt.NumericTag;
-import net.minecraft.nbt.ShortTag;
-import net.minecraft.nbt.StringTag;
-import net.minecraft.nbt.Tag;
 import dev.itemloom.paper.nms.NmsItems;
-import org.bukkit.craftbukkit.inventory.CraftItemStack;
+import java.util.*;
+import java.util.function.Consumer;
+import net.minecraft.nbt.*;
 import org.bukkit.inventory.ItemStack;
 
-/**
- * Typed script values for NI's NBT vocabulary, implemented directly against Paper 26.2.
- * Behavioral reference: NeigeItems / InkerBot NBT wrappers, GPL-3.0 (see NOTICE.md).
- * Raw handles and clones are detached; item-backed mutations pass through one validated commit.
- */
+/** Script values own a tree; live roots commit a candidate before publishing local changes. */
 public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
-    final Tag tag;
-    final Store store;
+    private final byte type;
+    private final Tag scalar;
+    private LegacyNbt parent;
 
-    LegacyNbt(Tag tag, Store store) {
-        this.tag = Objects.requireNonNull(tag, "tag");
-        this.store = Objects.requireNonNull(store, "store");
+    private LegacyNbt(int type, Tag scalar) {
+        this.type = (byte) type;
+        this.scalar = scalar;
     }
 
     public final byte getId() {
-        return tag.getId();
+        return type;
     }
 
     public final Tag getHandle() {
@@ -62,23 +27,35 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
     }
 
     public Tag copyTag() {
-        synchronized (store.owner()) {
-            return tag.copy();
-        }
+        return scalar.copy();
     }
 
     public String getAsString() {
-        return tag.toString();
+        return copyTag().toString();
     }
 
     public final Object toValue() {
-        return plain(copyTag());
+        if (this instanceof Numeric numeric) return numeric.getAsNumber();
+        if (this instanceof StringValue string) return string.getAsString();
+        if (this instanceof Compound compound) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (String key : compound.copyTag().keySet())
+                result.put(key, compound.get(key).toValue());
+            return result;
+        }
+        if (this instanceof CollectionValue<?> collection) {
+            List<Object> result = new ArrayList<>();
+            for (Object value : collection)
+                result.add(value instanceof LegacyNbt nbt ? nbt.toValue() : value);
+            return result;
+        }
+        return getAsString();
     }
 
     public static Object toValue(Object value) {
         if (value instanceof LegacyNbt nbt) return nbt.toValue();
-        if (value instanceof Tag nbt) return plain(nbt);
-        throw new IllegalArgumentException("Not an NBT value: " + value);
+        if (value instanceof Tag tag) return wrap(tag).toValue();
+        throw new IllegalArgumentException("Expected an NBT value");
     }
 
     @Override
@@ -88,314 +65,236 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
     @Override
     public final String toString() {
-        synchronized (store) {
-            return tag.toString();
-        }
+        return copyTag().toString();
     }
 
     @Override
     public final int hashCode() {
-        synchronized (store) {
-            return tag.hashCode();
-        }
+        return copyTag().hashCode();
     }
 
     @Override
-    public final boolean equals(Object other) {
-        return this == other || other instanceof LegacyNbt nbt && copyTag().equals(nbt.copyTag());
+    public final boolean equals(Object value) {
+        return value instanceof LegacyNbt other && copyTag().equals(other.copyTag());
     }
 
     @Override
     public int compareTo(LegacyNbt other) {
-        int type = Byte.compare(getId(), other.getId());
-        return type != 0 ? type : getAsString().compareTo(other.getAsString());
+        int types = Byte.compare(type, other.type);
+        return types != 0 ? types : getAsString().compareTo(other.getAsString());
     }
 
     public static LegacyNbt of(Object value) {
-        return wrap(encode(value));
+        if (value instanceof LegacyNbt nbt) return nbt.clone();
+        if (value instanceof Map<?, ?> map) {
+            Compound result = new Compound();
+            for (var entry : map.entrySet())
+                result.put(Objects.requireNonNull(entry.getKey()).toString(), of(entry.getValue()));
+            return result;
+        }
+        if (value instanceof Collection<?> collection) {
+            ListValue result = new ListValue();
+            for (Object element : collection) result.add(of(element));
+            return result;
+        }
+        return wrap(NmsItems.tag(value));
     }
 
     public static LegacyNbt wrap(Tag value) {
         if (value == null) return null;
-        Tag copy = value.copy();
-        return view(copy, new Store(copy, null));
-    }
-
-    static Compound linked(
-            CompoundTag value, ItemStack source, BiConsumer<CompoundTag, CompoundTag> commit) {
-        CompoundTag copy = value.copy();
-        return new Compound(copy, new Store(copy, source, commit));
-    }
-
-    private static LegacyNbt view(Tag value, Store owner) {
-        if (value == null) return null;
-        return switch (value) {
-            case CompoundTag tag -> new Compound(tag, owner);
-            case ListTag tag -> new ListValue(tag, owner);
-            case ByteTag tag -> new ByteValue(tag, owner);
-            case ShortTag tag -> new ShortValue(tag, owner);
-            case IntTag tag -> new IntValue(tag, owner);
-            case LongTag tag -> new LongValue(tag, owner);
-            case FloatTag tag -> new FloatValue(tag, owner);
-            case DoubleTag tag -> new DoubleValue(tag, owner);
-            case StringTag tag -> new StringValue(tag, owner);
-            case ByteArrayTag tag -> new ByteArray(tag, owner);
-            case IntArrayTag tag -> new IntArray(tag, owner);
-            case LongArrayTag tag -> new LongArray(tag, owner);
-            case EndTag ignored -> End.INSTANCE;
+        return switch (value.getId()) {
+            case 0 -> End.INSTANCE;
+            case 1 -> ByteValue.valueOf(((NumericTag) value).byteValue());
+            case 2 -> ShortValue.valueOf(((NumericTag) value).shortValue());
+            case 3 -> IntValue.valueOf(((NumericTag) value).intValue());
+            case 4 -> LongValue.valueOf(((NumericTag) value).longValue());
+            case 5 -> FloatValue.valueOf(((NumericTag) value).floatValue());
+            case 6 -> DoubleValue.valueOf(((NumericTag) value).doubleValue());
+            case 7 -> new ByteArray(((ByteArrayTag) value).getAsByteArray());
+            case 8 -> StringValue.valueOf(value.asString().orElseThrow());
+            case 9 -> new ListValue((ListTag) value);
+            case 10 -> new Compound((CompoundTag) value);
+            case 11 -> new IntArray(((IntArrayTag) value).getAsIntArray());
+            case 12 -> new LongArray(((LongArrayTag) value).getAsLongArray());
             default -> throw new IllegalArgumentException("Unsupported NBT type: " + value.getId());
         };
     }
 
-    private static Tag encode(Object value) {
-        if (value instanceof LegacyNbt nbt) return nbt.copyTag();
-        if (value instanceof Map<?, ?> map) {
-            CompoundTag result = new CompoundTag();
-            map.forEach(
-                    (key, child) ->
-                            result.put(
-                                    Objects.requireNonNull(key, "key").toString(), encode(child)));
-            return result;
-        }
-        if (value instanceof Collection<?> list) {
-            ListTag result = new ListTag();
-            for (Object child : list) result.add(encode(child));
-            return result;
-        }
-        return NmsItems.tag(value);
+    private boolean mutable() {
+        return this instanceof Compound || this instanceof ListValue;
     }
 
-    private static Object plain(Tag value) {
-        if (value instanceof NumericTag number) return number.box();
-        if (value instanceof StringTag string) return string.value();
-        if (value instanceof CompoundTag compound) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            compound.entrySet()
-                    .forEach(entry -> result.put(entry.getKey(), plain(entry.getValue())));
-            return result;
-        }
-        List<Object> result = new ArrayList<>();
-        if (value instanceof ListTag list) {
-            for (Tag child : list) result.add(plain(child));
-            return result;
-        }
-        if (value instanceof ByteArrayTag array) {
-            for (byte child : array.getAsByteArray()) result.add(child);
-            return result;
-        }
-        if (value instanceof IntArrayTag array) {
-            for (int child : array.getAsIntArray()) result.add(child);
-            return result;
-        }
-        if (value instanceof LongArrayTag array) {
-            for (long child : array.getAsLongArray()) result.add(child);
-            return result;
-        }
-        return value.toString();
+    final LegacyNbt incoming(LegacyNbt value, Set<LegacyNbt> selected) {
+        Objects.requireNonNull(value, "value");
+        if (!value.mutable()) return value;
+        boolean copy =
+                value.parent != null
+                        || value instanceof Compound compound && compound.binding != null;
+        for (LegacyNbt ancestor = this; ancestor != null; ancestor = ancestor.parent)
+            copy |= ancestor == value;
+        if (!selected.add(value)) copy = true;
+        return copy ? value.clone() : value;
     }
 
-    /** Retain child object identity while validating a detached candidate before any live write. */
-    private static final class Store {
-        private final Tag root;
-        private final ItemStack source;
-        private final BiConsumer<CompoundTag, CompoundTag> commit;
-        private volatile Store parent;
+    private static Set<LegacyNbt> identities() {
+        return Collections.newSetFromMap(new IdentityHashMap<>());
+    }
 
-        private Store(Tag root, BiConsumer<CompoundTag, CompoundTag> commit) {
-            this(root, null, commit);
+    final void replaceChildren(Collection<LegacyNbt> before, Collection<LegacyNbt> after) {
+        Set<LegacyNbt> retained = identities();
+        retained.addAll(after);
+        for (LegacyNbt child : before) {
+            if (child.mutable() && child.parent == this && !retained.contains(child))
+                child.parent = null;
         }
+        for (LegacyNbt child : after) if (child.mutable()) child.parent = this;
+    }
 
-        private Store(Tag root, ItemStack source, BiConsumer<CompoundTag, CompoundTag> commit) {
-            this.root = root;
-            this.source = source;
-            this.commit = commit;
-        }
-
-        private Store owner() {
-            Store current = this;
-            while (current.parent != null) current = current.parent;
-            return current;
-        }
-
-        synchronized <R> R change(Tag target, Function<Tag, R> operation) {
-            Store owner = owner();
-            if (owner != this) return owner.change(target, operation);
-            if (commit == null) return operation.apply(target);
-            List<Object> path = new ArrayList<>();
-            // A previously removed child's handle remains a detached value, as in the old API.
-            if (!locate(root, target, path)) return operation.apply(target);
-            CompoundTag candidate = ((CompoundTag) root).copy();
-            Tag at = candidate;
-            for (Object step : path)
-                at =
-                        step instanceof String key
-                                ? ((CompoundTag) at).get(key)
-                                : ((ListTag) at).get((Integer) step);
-            operation.apply(at);
-            if (!candidate.equals(root)) commit.accept(((CompoundTag) root).copy(), candidate);
-            return operation.apply(target);
-        }
-
-        private static boolean locate(Tag node, Tag target, List<Object> path) {
-            if (node == target) return true;
-            if (node instanceof CompoundTag compound) {
-                for (var entry : compound.entrySet()) {
-                    path.add(entry.getKey());
-                    if (locate(entry.getValue(), target, path)) return true;
-                    path.removeLast();
-                }
-            } else if (node instanceof ListTag list) {
-                for (int index = 0; index < list.size(); index++) {
-                    path.add(index);
-                    if (locate(list.get(index), target, path)) return true;
-                    path.removeLast();
-                }
+    final void change(Tag desired, Runnable publish) {
+        LegacyNbt cursor = this;
+        Tag candidate = desired;
+        while (cursor.parent != null) {
+            LegacyNbt owner = cursor.parent;
+            if (owner instanceof Compound compound) {
+                CompoundTag replacement = compound.copyTag();
+                replacement.put(compound.keyOf(cursor), candidate);
+                candidate = replacement;
+            } else {
+                ListValue list = (ListValue) owner;
+                ListTag replacement = list.copyTag();
+                replacement.set(list.indexOfIdentity(cursor), candidate);
+                candidate = replacement;
             }
-            return false;
+            cursor = owner;
         }
+        if (cursor instanceof Compound root && root.binding != null && root.localEdits == 0) {
+            root.binding.commit(root.copyTag(), (CompoundTag) candidate);
+        }
+        publish.run();
     }
 
-    /** A newly constructed subtree remains live after insertion; existing shared trees are copied. */
-    private static final class Insert {
-        private final LegacyNbt source;
-        private final Store destination;
-        private final Tag snapshot;
-        private final boolean adopt;
-        private boolean attached;
-
-        private Insert(LegacyNbt source, Store destination) {
-            this(source, destination, true);
-        }
-
-        private Insert(LegacyNbt source, Store destination, boolean allowAdopt) {
-            this.source = Objects.requireNonNull(source, "value");
-            this.destination = destination;
-            snapshot = source.copyTag();
-            adopt =
-                    allowAdopt
-                            && (source.tag instanceof CompoundTag || source.tag instanceof ListTag)
-                            && source.store.parent == null
-                            && source.store.commit == null
-                            && source.store.root == source.tag
-                            && source.store != destination.owner();
-        }
-
-        private Tag value(boolean live) {
-            if (live && adopt) {
-                attached = true;
-                return source.tag;
-            }
-            return snapshot.copy();
-        }
-
-        private void finish() {
-            if (attached) source.store.parent = destination.owner();
-        }
+    final void atomic(Consumer<Compound> preview, Consumer<Compound> publish) {
+        Compound current = (Compound) this;
+        Compound candidate = current.clone();
+        preview.accept(candidate);
+        change(
+                candidate.copyTag(),
+                () -> {
+                    LegacyNbt cursor = current;
+                    while (cursor.parent != null) cursor = cursor.parent;
+                    Compound root = cursor instanceof Compound compound ? compound : null;
+                    if (root != null) root.localEdits++;
+                    try {
+                        publish.accept(current);
+                    } finally {
+                        if (root != null) root.localEdits--;
+                    }
+                });
     }
 
     public static final class Compound extends LegacyNbt implements Map<String, LegacyNbt> {
-        private static final java.util.Comparator<Entry<String, LegacyNbt>> ENTRY_ORDER =
-                Entry.<String, LegacyNbt>comparingByKey().thenComparing(Entry.comparingByValue());
+        private final Map<String, LegacyNbt> entries = new LinkedHashMap<>();
+        private LegacyNbtItemStack binding;
+        private int localEdits;
 
         public Compound() {
-            this(new CompoundTag());
+            super(Type.TAG_COMPOUND, null);
         }
 
-        public Compound(CompoundTag value) {
-            this(value.copy(), null);
+        public Compound(CompoundTag tag) {
+            this();
+            for (String key : tag.keySet()) entries.put(key, wrap(tag.get(key)));
+            replaceChildren(List.of(), entries.values());
         }
 
-        private Compound(CompoundTag value, Store owner) {
-            super(value, owner == null ? new Store(value, null) : owner);
-        }
-
-        private CompoundTag compound() {
-            return (CompoundTag) tag;
+        static Compound live(CompoundTag tag, LegacyNbtItemStack binding) {
+            Compound result = new Compound(tag);
+            result.binding = binding;
+            return result;
         }
 
         public static Compound createUnsafe(Object value) {
-            return value instanceof CompoundTag compound ? new Compound(compound) : null;
+            return value instanceof CompoundTag tag ? new Compound(tag) : null;
         }
 
         @Override
         public CompoundTag copyTag() {
-            return (CompoundTag) super.copyTag();
+            CompoundTag result = new CompoundTag();
+            entries.forEach((key, value) -> result.put(key, value.copyTag()));
+            return result;
         }
 
         @Override
         public Compound clone() {
-            return new Compound(copyTag(), null);
+            return new Compound(copyTag());
         }
 
         @Override
         public int compareTo(LegacyNbt other) {
-            if (!(other instanceof Compound value)) return super.compareTo(other);
-            return dev.itemloom.paper.compat.LegacyStateRules.compareOrdered(
-                    size(), entrySet(), value.size(), value.entrySet(), ENTRY_ORDER);
+            int types = Byte.compare(getId(), other.getId());
+            if (types != 0) return types;
+            Compound right = (Compound) other;
+            int lengths = Integer.compare(size(), right.size());
+            if (lengths != 0) return lengths;
+            var leftEntries = copyTag().entrySet().iterator();
+            var rightEntries = right.copyTag().entrySet().iterator();
+            while (leftEntries.hasNext()) {
+                var a = leftEntries.next();
+                var b = rightEntries.next();
+                int keys = a.getKey().compareTo(b.getKey());
+                if (keys != 0) return keys;
+                int values = wrap(a.getValue()).compareTo(wrap(b.getValue()));
+                if (values != 0) return values;
+            }
+            return 0;
         }
 
         public void saveTo(ItemStack item) {
-            Objects.requireNonNull(item, "item");
-            Store owner = store.owner();
-            synchronized (owner) {
-                if (owner.root == tag
-                        && owner.source != null
-                        && (owner.source == item
-                                || CraftItemStack.unwrap(owner.source)
-                                        == CraftItemStack.unwrap(item))) {
-                    // Live edits have already committed. Replaying this stale snapshot as a
-                    // replacement would erase changes made through another handle. The normal
-                    // commit still validates/migrates an untouched legacy item when saved.
-                    owner.commit.accept(compound().copy(), compound().copy());
-                    return;
-                }
-            }
-            new LegacyNbtItemStack(item).setTag(this);
+            if (binding != null && binding.sameTarget(item)) binding.commit(copyTag(), copyTag());
+            else new LegacyNbtItemStack(item).setTag(this);
         }
 
         @Override
         public int size() {
-            return compound().size();
+            return entries.size();
         }
 
         @Override
         public boolean isEmpty() {
-            return compound().isEmpty();
+            return entries.isEmpty();
         }
 
         @Override
         public boolean containsKey(Object key) {
-            return key instanceof String name && compound().contains(name);
+            return key instanceof String text && containsKey(text);
         }
 
         public boolean containsKey(String key) {
-            return containsKey((Object) key);
+            return entries.containsKey(key);
         }
 
         @Override
         public boolean containsValue(Object value) {
-            return values().contains(value);
+            return entries.containsValue(value);
         }
 
         @Override
         public LegacyNbt get(Object key) {
-            return key instanceof String name ? view(compound().get(name), store) : null;
+            return key instanceof String text ? get(text) : null;
         }
 
         public LegacyNbt get(String key) {
-            return get((Object) key);
+            return entries.get(key);
         }
 
         @Override
         public LegacyNbt put(String key, LegacyNbt value) {
             Objects.requireNonNull(key, "key");
-            Insert prepared = new Insert(value, store);
-            Tag previous =
-                    store.change(
-                            tag,
-                            node -> ((CompoundTag) node).put(key, prepared.value(node == tag)));
-            prepared.finish();
-            return wrap(previous);
+            LegacyNbt inserted = incoming(value, identities());
+            Map<String, LegacyNbt> next = new LinkedHashMap<>(entries);
+            LegacyNbt prior = next.put(key, inserted);
+            update(next);
+            return prior == null ? null : prior.clone();
         }
 
         public void set(String key, LegacyNbt value) {
@@ -404,12 +303,15 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public LegacyNbt remove(Object key) {
-            if (!(key instanceof String name)) return null;
-            return wrap(store.change(tag, node -> ((CompoundTag) node).remove(name)));
+            return key instanceof String text ? remove(text) : null;
         }
 
         public LegacyNbt remove(String key) {
-            return remove((Object) key);
+            if (!entries.containsKey(key)) return null;
+            Map<String, LegacyNbt> next = new LinkedHashMap<>(entries);
+            LegacyNbt prior = next.remove(key);
+            update(next);
+            return prior.clone();
         }
 
         public void delete(String key) {
@@ -418,43 +320,36 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public void putAll(Map<? extends String, ? extends LegacyNbt> values) {
-            Map<String, Insert> prepared = new LinkedHashMap<>();
-            Set<Tag> sources = Collections.newSetFromMap(new IdentityHashMap<>());
-            values.forEach(
-                    (key, value) ->
-                            prepared.put(
-                                    Objects.requireNonNull(key),
-                                    new Insert(value, store, sources.add(value.tag))));
-            store.change(
-                    tag,
-                    node -> {
-                        prepared.forEach(
-                                (key, value) ->
-                                        ((CompoundTag) node).put(key, value.value(node == tag)));
-                        return null;
-                    });
-            prepared.values().forEach(Insert::finish);
+            Set<LegacyNbt> selected = identities();
+            Map<String, LegacyNbt> next = new LinkedHashMap<>(entries);
+            for (var entry : values.entrySet())
+                next.put(
+                        Objects.requireNonNull(entry.getKey(), "key"),
+                        incoming(entry.getValue(), selected));
+            update(next);
         }
 
         @Override
         public void clear() {
-            store.change(
-                    tag,
-                    node -> {
-                        for (String key : new ArrayList<>(((CompoundTag) node).keySet()))
-                            ((CompoundTag) node).remove(key);
-                        return null;
+            update(Map.of());
+        }
+
+        private void update(Map<String, LegacyNbt> next) {
+            CompoundTag candidate = new CompoundTag();
+            next.forEach((key, value) -> candidate.put(key, value.copyTag()));
+            change(
+                    candidate,
+                    () -> {
+                        replaceChildren(entries.values(), next.values());
+                        entries.clear();
+                        entries.putAll(next);
                     });
         }
 
-        @Override
-        public Set<String> keySet() {
-            return mapView().keySet();
-        }
-
-        @Override
-        public Collection<LegacyNbt> values() {
-            return mapView().values();
+        private String keyOf(LegacyNbt child) {
+            for (var entry : entries.entrySet())
+                if (entry.getValue() == child) return entry.getKey();
+            throw new IllegalStateException("Detached NBT child");
         }
 
         private Map<String, LegacyNbt> mapView() {
@@ -465,20 +360,20 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
                 }
 
                 @Override
-                public int size() {
-                    return Compound.this.size();
-                }
-
-                @Override
-                public LegacyNbt remove(Object key) {
-                    return Compound.this.remove(key);
-                }
-
-                @Override
-                public void clear() {
-                    Compound.this.clear();
+                public LegacyNbt put(String key, LegacyNbt value) {
+                    return Compound.this.put(key, value);
                 }
             };
+        }
+
+        @Override
+        public Set<String> keySet() {
+            return mapView().keySet();
+        }
+
+        @Override
+        public Collection<LegacyNbt> values() {
+            return mapView().values();
         }
 
         @Override
@@ -496,9 +391,10 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
                 @Override
                 public Iterator<Entry<String, LegacyNbt>> iterator() {
-                    Iterator<String> keys = new ArrayList<>(compound().keySet()).iterator();
+                    Iterator<String> keys = new ArrayList<>(copyTag().keySet()).iterator();
                     return new Iterator<>() {
-                        private String current;
+                        private String last;
+                        private boolean removable;
 
                         @Override
                         public boolean hasNext() {
@@ -507,8 +403,9 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
                         @Override
                         public Entry<String, LegacyNbt> next() {
-                            current = keys.next();
-                            final String key = current;
+                            String key = keys.next();
+                            last = key;
+                            removable = true;
                             return new Entry<>() {
                                 @Override
                                 public String getKey() {
@@ -517,33 +414,33 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
                                 @Override
                                 public LegacyNbt getValue() {
-                                    return Compound.this.get(key);
+                                    return get(key);
                                 }
 
                                 @Override
                                 public LegacyNbt setValue(LegacyNbt value) {
-                                    return Compound.this.put(key, value);
+                                    return put(key, value);
+                                }
+
+                                @Override
+                                public boolean equals(Object other) {
+                                    return other instanceof Entry<?, ?> entry
+                                            && Objects.equals(key, entry.getKey())
+                                            && Objects.equals(getValue(), entry.getValue());
                                 }
 
                                 @Override
                                 public int hashCode() {
-                                    return key.hashCode() ^ Objects.hashCode(getValue());
-                                }
-
-                                @Override
-                                public boolean equals(Object value) {
-                                    return value instanceof Entry<?, ?> entry
-                                            && key.equals(entry.getKey())
-                                            && Objects.equals(getValue(), entry.getValue());
+                                    return Objects.hashCode(key) ^ Objects.hashCode(getValue());
                                 }
                             };
                         }
 
                         @Override
                         public void remove() {
-                            if (current == null) throw new IllegalStateException();
-                            Compound.this.remove(current);
-                            current = null;
+                            if (!removable) throw new IllegalStateException();
+                            Compound.this.remove(last);
+                            removable = false;
                         }
                     };
                 }
@@ -557,20 +454,23 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         public boolean contains(String key, int type) {
             LegacyNbt value = get(key);
-            return value != null && (type == 99 ? value instanceof Numeric : value.getId() == type);
+            return value != null
+                    && (type == Type.TAG_ANY_NUMBER
+                            ? value instanceof Numeric
+                            : value.getId() == type);
         }
 
         public LegacyNbt getDeep(String path) {
             return getDeep(path, '.', '\\');
         }
 
-        public LegacyNbt getDeep(String path, char separator, char escape) {
-            LegacyNbt current = this;
-            for (String key : EscapedPath.split(path, separator, escape)) {
-                if (!(current instanceof Compound compound)) return null;
-                current = compound.get(key);
+        public LegacyNbt getDeep(String path, char delimiter, char escape) {
+            LegacyNbt value = this;
+            for (String key : EscapedPath.split(path, delimiter, escape)) {
+                if (!(value instanceof Compound compound)) return null;
+                value = compound.get(key);
             }
-            return current;
+            return value;
         }
 
         public void putDeep(String path, LegacyNbt value) {
@@ -582,114 +482,55 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public void putDeep(
-                String path, LegacyNbt value, boolean force, char separator, char escape) {
-            List<String> keys = EscapedPath.split(path, separator, escape);
-            Insert prepared = new Insert(value, store);
-            store.change(
-                    tag,
-                    node -> {
-                        CompoundTag current = (CompoundTag) node;
-                        for (int index = 0; index < keys.size() - 1; index++) {
-                            String key = keys.get(index);
-                            Tag child = current.get(key);
-                            if (child != null && !(child instanceof CompoundTag) && !force)
-                                return null;
-                            if (!(child instanceof CompoundTag)) {
-                                child = new CompoundTag();
-                                current.put(key, child);
-                            }
-                            current = (CompoundTag) child;
-                        }
-                        current.put(keys.getLast(), prepared.value(node == tag));
-                        return null;
-                    });
-            prepared.finish();
+                String path, LegacyNbt value, boolean force, char delimiter, char escape) {
+            Objects.requireNonNull(value, "value");
+            List<String> keys = EscapedPath.split(path, delimiter, escape);
+            Compound cursor = this;
+            for (int index = 0; index < keys.size() - 1; index++) {
+                LegacyNbt child = cursor.get(keys.get(index));
+                if (child != null && !(child instanceof Compound) && !force) return;
+                if (!(child instanceof Compound)) {
+                    final int from = index;
+                    LegacyNbt inserted = cursor.incoming(value, identities());
+                    cursor.atomic(
+                            candidate -> candidate.writePath(keys, from, inserted.clone()),
+                            target -> target.writePath(keys, from, inserted));
+                    return;
+                }
+                cursor = (Compound) child;
+            }
+            cursor.put(keys.getLast(), value);
+        }
+
+        private void writePath(List<String> keys, int from, LegacyNbt value) {
+            Compound cursor = this;
+            for (int index = from; index < keys.size() - 1; index++)
+                cursor = cursor.getOrCreateCompound(keys.get(index));
+            cursor.put(keys.getLast(), value);
         }
 
         public void deleteDeep(String path) {
             List<String> keys = EscapedPath.split(path, '.', '\\');
-            store.change(
-                    tag,
-                    node -> {
-                        CompoundTag current = (CompoundTag) node;
-                        for (int index = 0; index < keys.size() - 1; index++) {
-                            if (!(current.get(keys.get(index)) instanceof CompoundTag child))
-                                return null;
-                            current = child;
-                        }
-                        current.remove(keys.getLast());
-                        return null;
-                    });
+            Compound cursor = this;
+            for (int index = 0; index < keys.size() - 1; index++) {
+                if (!(cursor.get(keys.get(index)) instanceof Compound next)) return;
+                cursor = next;
+            }
+            cursor.remove(keys.getLast());
         }
 
-        public Compound coverWith(Compound overlay) {
-            CompoundTag values = overlay.copyTag();
-            store.change(
-                    tag,
-                    node -> {
-                        cover((CompoundTag) node, values);
-                        return null;
-                    });
+        public Compound coverWith(Compound source) {
+            Compound detached = Objects.requireNonNull(source).clone();
+            atomic(candidate -> candidate.overlay(detached), target -> target.overlay(detached));
             return this;
         }
 
-        private static void cover(CompoundTag base, CompoundTag overlay) {
-            for (var entry : overlay.entrySet()) {
-                if (entry.getValue() instanceof CompoundTag child
-                        && base.get(entry.getKey()) instanceof CompoundTag existing)
-                    cover(existing, child);
-                else base.put(entry.getKey(), entry.getValue().copy());
+        private void overlay(Compound source) {
+            for (var entry : source.entries.entrySet()) {
+                if (get(entry.getKey()) instanceof Compound child
+                        && entry.getValue() instanceof Compound added) child.overlay(added);
+                else put(entry.getKey(), entry.getValue().clone());
             }
-        }
-
-        public Compound getCompound(String key) {
-            return getCompound(key, null);
-        }
-
-        public Compound getCompoundOrNull(String key) {
-            return getCompound(key);
-        }
-
-        public Compound getCompound(String key, Compound fallback) {
-            return get(key) instanceof Compound value ? value : fallback;
-        }
-
-        public Compound getOrCreateCompound(String key) {
-            Compound result = getCompound(key);
-            if (result == null) {
-                put(key, new Compound());
-                result = getCompound(key);
-            }
-            return result;
-        }
-
-        public ListValue getList(String key) {
-            return getList(key, (ListValue) null);
-        }
-
-        public ListValue getListOrNull(String key) {
-            return getList(key);
-        }
-
-        public ListValue getList(String key, ListValue fallback) {
-            return get(key) instanceof ListValue value ? value : fallback;
-        }
-
-        public ListValue getList(String key, int type) {
-            ListValue result = getList(key);
-            return result == null
-                            || type != 0 && !result.isEmpty() && result.getFirst().getId() != type
-                    ? new ListValue()
-                    : result;
-        }
-
-        public ListValue getOrCreateList(String key) {
-            ListValue result = getList(key);
-            if (result == null) {
-                put(key, new ListValue());
-                result = getList(key);
-            }
-            return result;
         }
 
         public byte getByte(String key) {
@@ -697,35 +538,13 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public byte getByte(String key, byte fallback) {
-            return get(key) instanceof Numeric value ? value.getAsByte() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsByte() : fallback;
         }
 
         public Byte getByteOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsByte() : null;
-        }
-
-        public byte getDeepByte(String key) {
-            return getDeepByte(key, (byte) 0);
-        }
-
-        public byte getDeepByte(String key, byte fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsByte() : fallback;
-        }
-
-        public Byte getDeepByteOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsByte() : null;
-        }
-
-        public void putByte(String key, byte value) {
-            put(key, ByteValue.valueOf(value));
-        }
-
-        public void putDeepByte(String key, byte value) {
-            putDeepByte(key, value, false);
-        }
-
-        public void putDeepByte(String key, byte value, boolean force) {
-            putDeep(key, ByteValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsByte() : null;
         }
 
         public short getShort(String key) {
@@ -733,179 +552,69 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public short getShort(String key, short fallback) {
-            return get(key) instanceof Numeric value ? value.getAsShort() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsShort() : fallback;
         }
 
         public Short getShortOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsShort() : null;
-        }
-
-        public short getDeepShort(String key) {
-            return getDeepShort(key, (short) 0);
-        }
-
-        public short getDeepShort(String key, short fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsShort() : fallback;
-        }
-
-        public Short getDeepShortOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsShort() : null;
-        }
-
-        public void putShort(String key, short value) {
-            put(key, ShortValue.valueOf(value));
-        }
-
-        public void putDeepShort(String key, short value) {
-            putDeepShort(key, value, false);
-        }
-
-        public void putDeepShort(String key, short value, boolean force) {
-            putDeep(key, ShortValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsShort() : null;
         }
 
         public int getInt(String key) {
-            return getInt(key, 0);
+            return getInt(key, (int) 0);
         }
 
         public int getInt(String key, int fallback) {
-            return get(key) instanceof Numeric value ? value.getAsInt() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsInt() : fallback;
         }
 
         public Integer getIntOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsInt() : null;
-        }
-
-        public int getDeepInt(String key) {
-            return getDeepInt(key, 0);
-        }
-
-        public int getDeepInt(String key, int fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsInt() : fallback;
-        }
-
-        public Integer getDeepIntOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsInt() : null;
-        }
-
-        public void putInt(String key, int value) {
-            put(key, IntValue.valueOf(value));
-        }
-
-        public void putDeepInt(String key, int value) {
-            putDeepInt(key, value, false);
-        }
-
-        public void putDeepInt(String key, int value, boolean force) {
-            putDeep(key, IntValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsInt() : null;
         }
 
         public long getLong(String key) {
-            return getLong(key, 0);
+            return getLong(key, (long) 0);
         }
 
         public long getLong(String key, long fallback) {
-            return get(key) instanceof Numeric value ? value.getAsLong() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsLong() : fallback;
         }
 
         public Long getLongOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsLong() : null;
-        }
-
-        public long getDeepLong(String key) {
-            return getDeepLong(key, 0);
-        }
-
-        public long getDeepLong(String key, long fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsLong() : fallback;
-        }
-
-        public Long getDeepLongOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsLong() : null;
-        }
-
-        public void putLong(String key, long value) {
-            put(key, LongValue.valueOf(value));
-        }
-
-        public void putDeepLong(String key, long value) {
-            putDeepLong(key, value, false);
-        }
-
-        public void putDeepLong(String key, long value, boolean force) {
-            putDeep(key, LongValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsLong() : null;
         }
 
         public float getFloat(String key) {
-            return getFloat(key, 0);
+            return getFloat(key, (float) 0);
         }
 
         public float getFloat(String key, float fallback) {
-            return get(key) instanceof Numeric value ? value.getAsFloat() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsFloat() : fallback;
         }
 
         public Float getFloatOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsFloat() : null;
-        }
-
-        public float getDeepFloat(String key) {
-            return getDeepFloat(key, 0);
-        }
-
-        public float getDeepFloat(String key, float fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsFloat() : fallback;
-        }
-
-        public Float getDeepFloatOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsFloat() : null;
-        }
-
-        public void putFloat(String key, float value) {
-            put(key, FloatValue.valueOf(value));
-        }
-
-        public void putDeepFloat(String key, float value) {
-            putDeepFloat(key, value, false);
-        }
-
-        public void putDeepFloat(String key, float value, boolean force) {
-            putDeep(key, FloatValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsFloat() : null;
         }
 
         public double getDouble(String key) {
-            return getDouble(key, 0);
+            return getDouble(key, (double) 0);
         }
 
         public double getDouble(String key, double fallback) {
-            return get(key) instanceof Numeric value ? value.getAsDouble() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsDouble() : fallback;
         }
 
         public Double getDoubleOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsDouble() : null;
-        }
-
-        public double getDeepDouble(String key) {
-            return getDeepDouble(key, 0);
-        }
-
-        public double getDeepDouble(String key, double fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsDouble() : fallback;
-        }
-
-        public Double getDeepDoubleOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsDouble() : null;
-        }
-
-        public void putDouble(String key, double value) {
-            put(key, DoubleValue.valueOf(value));
-        }
-
-        public void putDeepDouble(String key, double value) {
-            putDeepDouble(key, value, false);
-        }
-
-        public void putDeepDouble(String key, double value, boolean force) {
-            putDeep(key, DoubleValue.valueOf(value), force);
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsDouble() : null;
         }
 
         public byte[] getByteArray(String key) {
@@ -913,47 +622,12 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public byte[] getByteArray(String key, byte[] fallback) {
-            return get(key) instanceof ByteArray value ? value.getAsByteArray() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof ByteArray array ? array.getAsByteArray() : fallback;
         }
 
         public byte[] getByteArrayOrNull(String key) {
             return getByteArray(key, null);
-        }
-
-        public byte[] getDeepByteArray(String key) {
-            return getDeepByteArray(key, new byte[0]);
-        }
-
-        public byte[] getDeepByteArray(String key, byte[] fallback) {
-            return getDeep(key) instanceof ByteArray value ? value.getAsByteArray() : fallback;
-        }
-
-        public byte[] getDeepByteArrayOrNull(String key) {
-            return getDeepByteArray(key, null);
-        }
-
-        public void putByteArray(String key, byte[] value) {
-            put(key, new ByteArray(value));
-        }
-
-        public void putDeepByteArray(String key, byte[] value) {
-            putDeepByteArray(key, value, false);
-        }
-
-        public void putDeepByteArray(String key, byte[] value, boolean force) {
-            putDeep(key, new ByteArray(value), force);
-        }
-
-        public void putByteArray(String key, List<? extends Number> value) {
-            put(key, new ByteArray(value));
-        }
-
-        public void putDeepByteArray(String key, List<? extends Number> value) {
-            putDeepByteArray(key, value, false);
-        }
-
-        public void putDeepByteArray(String key, List<? extends Number> value, boolean force) {
-            putDeep(key, new ByteArray(value), force);
         }
 
         public int[] getIntArray(String key) {
@@ -961,47 +635,12 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public int[] getIntArray(String key, int[] fallback) {
-            return get(key) instanceof IntArray value ? value.getAsIntArray() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof IntArray array ? array.getAsIntArray() : fallback;
         }
 
         public int[] getIntArrayOrNull(String key) {
             return getIntArray(key, null);
-        }
-
-        public int[] getDeepIntArray(String key) {
-            return getDeepIntArray(key, new int[0]);
-        }
-
-        public int[] getDeepIntArray(String key, int[] fallback) {
-            return getDeep(key) instanceof IntArray value ? value.getAsIntArray() : fallback;
-        }
-
-        public int[] getDeepIntArrayOrNull(String key) {
-            return getDeepIntArray(key, null);
-        }
-
-        public void putIntArray(String key, int[] value) {
-            put(key, new IntArray(value));
-        }
-
-        public void putDeepIntArray(String key, int[] value) {
-            putDeepIntArray(key, value, false);
-        }
-
-        public void putDeepIntArray(String key, int[] value, boolean force) {
-            putDeep(key, new IntArray(value), force);
-        }
-
-        public void putIntArray(String key, List<? extends Number> value) {
-            put(key, new IntArray(value));
-        }
-
-        public void putDeepIntArray(String key, List<? extends Number> value) {
-            putDeepIntArray(key, value, false);
-        }
-
-        public void putDeepIntArray(String key, List<? extends Number> value, boolean force) {
-            putDeep(key, new IntArray(value), force);
         }
 
         public long[] getLongArray(String key) {
@@ -1009,47 +648,38 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public long[] getLongArray(String key, long[] fallback) {
-            return get(key) instanceof LongArray value ? value.getAsLongArray() : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof LongArray array ? array.getAsLongArray() : fallback;
         }
 
         public long[] getLongArrayOrNull(String key) {
             return getLongArray(key, null);
         }
 
-        public long[] getDeepLongArray(String key) {
-            return getDeepLongArray(key, new long[0]);
+        public Compound getCompound(String key) {
+            return getCompound(key, null);
         }
 
-        public long[] getDeepLongArray(String key, long[] fallback) {
-            return getDeep(key) instanceof LongArray value ? value.getAsLongArray() : fallback;
+        public Compound getCompoundOrNull(String key) {
+            return getCompound(key, null);
         }
 
-        public long[] getDeepLongArrayOrNull(String key) {
-            return getDeepLongArray(key, null);
+        public Compound getCompound(String key, Compound fallback) {
+            LegacyNbt value = get(key);
+            return value instanceof Compound typed ? typed : fallback;
         }
 
-        public void putLongArray(String key, long[] value) {
-            put(key, new LongArray(value));
+        public ListValue getList(String key) {
+            return getList(key, null);
         }
 
-        public void putDeepLongArray(String key, long[] value) {
-            putDeepLongArray(key, value, false);
+        public ListValue getListOrNull(String key) {
+            return getList(key, null);
         }
 
-        public void putDeepLongArray(String key, long[] value, boolean force) {
-            putDeep(key, new LongArray(value), force);
-        }
-
-        public void putLongArray(String key, List<? extends Number> value) {
-            put(key, new LongArray(value));
-        }
-
-        public void putDeepLongArray(String key, List<? extends Number> value) {
-            putDeepLongArray(key, value, false);
-        }
-
-        public void putDeepLongArray(String key, List<? extends Number> value, boolean force) {
-            putDeep(key, new LongArray(value), force);
+        public ListValue getList(String key, ListValue fallback) {
+            LegacyNbt value = get(key);
+            return value instanceof ListValue typed ? typed : fallback;
         }
 
         public String getString(String key) {
@@ -1057,7 +687,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public String getStringOrNull(String key) {
-            return getString(key);
+            return getString(key, null);
         }
 
         public String getString(String key, String fallback) {
@@ -1070,11 +700,162 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public Boolean getBooleanOrNull(String key) {
-            return get(key) instanceof Numeric value ? value.getAsByte() != 0 : null;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : null;
         }
 
         public boolean getBoolean(String key, boolean fallback) {
-            return get(key) instanceof Numeric value ? value.getAsByte() != 0 : fallback;
+            LegacyNbt value = get(key);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : fallback;
+        }
+
+        public byte getDeepByte(String key) {
+            return getDeepByte(key, (byte) 0);
+        }
+
+        public byte getDeepByte(String key, byte fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsByte() : fallback;
+        }
+
+        public Byte getDeepByteOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsByte() : null;
+        }
+
+        public short getDeepShort(String key) {
+            return getDeepShort(key, (short) 0);
+        }
+
+        public short getDeepShort(String key, short fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsShort() : fallback;
+        }
+
+        public Short getDeepShortOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsShort() : null;
+        }
+
+        public int getDeepInt(String key) {
+            return getDeepInt(key, (int) 0);
+        }
+
+        public int getDeepInt(String key, int fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsInt() : fallback;
+        }
+
+        public Integer getDeepIntOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsInt() : null;
+        }
+
+        public long getDeepLong(String key) {
+            return getDeepLong(key, (long) 0);
+        }
+
+        public long getDeepLong(String key, long fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsLong() : fallback;
+        }
+
+        public Long getDeepLongOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsLong() : null;
+        }
+
+        public float getDeepFloat(String key) {
+            return getDeepFloat(key, (float) 0);
+        }
+
+        public float getDeepFloat(String key, float fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsFloat() : fallback;
+        }
+
+        public Float getDeepFloatOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsFloat() : null;
+        }
+
+        public double getDeepDouble(String key) {
+            return getDeepDouble(key, (double) 0);
+        }
+
+        public double getDeepDouble(String key, double fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsDouble() : fallback;
+        }
+
+        public Double getDeepDoubleOrNull(String key) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsDouble() : null;
+        }
+
+        public byte[] getDeepByteArray(String key) {
+            return getDeepByteArray(key, new byte[0]);
+        }
+
+        public byte[] getDeepByteArray(String key, byte[] fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof ByteArray array ? array.getAsByteArray() : fallback;
+        }
+
+        public byte[] getDeepByteArrayOrNull(String key) {
+            return getDeepByteArray(key, null);
+        }
+
+        public int[] getDeepIntArray(String key) {
+            return getDeepIntArray(key, new int[0]);
+        }
+
+        public int[] getDeepIntArray(String key, int[] fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof IntArray array ? array.getAsIntArray() : fallback;
+        }
+
+        public int[] getDeepIntArrayOrNull(String key) {
+            return getDeepIntArray(key, null);
+        }
+
+        public long[] getDeepLongArray(String key) {
+            return getDeepLongArray(key, new long[0]);
+        }
+
+        public long[] getDeepLongArray(String key, long[] fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof LongArray array ? array.getAsLongArray() : fallback;
+        }
+
+        public long[] getDeepLongArrayOrNull(String key) {
+            return getDeepLongArray(key, null);
+        }
+
+        public Compound getDeepCompound(String key) {
+            return getDeepCompound(key, null);
+        }
+
+        public Compound getDeepCompoundOrNull(String key) {
+            return getDeepCompound(key, null);
+        }
+
+        public Compound getDeepCompound(String key, Compound fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof Compound typed ? typed : fallback;
+        }
+
+        public ListValue getDeepList(String key) {
+            return getDeepList(key, null);
+        }
+
+        public ListValue getDeepListOrNull(String key) {
+            return getDeepList(key, null);
+        }
+
+        public ListValue getDeepList(String key, ListValue fallback) {
+            LegacyNbt value = getDeep(key);
+            return value instanceof ListValue typed ? typed : fallback;
         }
 
         public String getDeepString(String key) {
@@ -1082,7 +863,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public String getDeepStringOrNull(String key) {
-            return getDeepString(key);
+            return getDeepString(key, null);
         }
 
         public String getDeepString(String key, String fallback) {
@@ -1095,63 +876,211 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public Boolean getDeepBooleanOrNull(String key) {
-            return getDeep(key) instanceof Numeric value ? value.getAsByte() != 0 : null;
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : null;
         }
 
         public boolean getDeepBoolean(String key, boolean fallback) {
-            return getDeep(key) instanceof Numeric value ? value.getAsByte() != 0 : fallback;
+            LegacyNbt value = getDeep(key);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : fallback;
+        }
+
+        public Compound getOrCreateCompound(String key) {
+            Compound value = getCompound(key);
+            if (value != null) return value;
+            value = new Compound();
+            put(key, value);
+            return value;
+        }
+
+        public ListValue getOrCreateList(String key) {
+            ListValue value = getList(key);
+            if (value != null) return value;
+            value = new ListValue();
+            put(key, value);
+            return value;
+        }
+
+        public void putByte(String key, byte value) {
+            put(key, ByteValue.valueOf(value));
+        }
+
+        public void putDeepByte(String key, byte value) {
+            putDeep(key, ByteValue.valueOf(value));
+        }
+
+        public void putDeepByte(String key, byte value, boolean force) {
+            putDeep(key, ByteValue.valueOf(value), force);
+        }
+
+        public void putShort(String key, short value) {
+            put(key, ShortValue.valueOf(value));
+        }
+
+        public void putDeepShort(String key, short value) {
+            putDeep(key, ShortValue.valueOf(value));
+        }
+
+        public void putDeepShort(String key, short value, boolean force) {
+            putDeep(key, ShortValue.valueOf(value), force);
+        }
+
+        public void putInt(String key, int value) {
+            put(key, IntValue.valueOf(value));
+        }
+
+        public void putDeepInt(String key, int value) {
+            putDeep(key, IntValue.valueOf(value));
+        }
+
+        public void putDeepInt(String key, int value, boolean force) {
+            putDeep(key, IntValue.valueOf(value), force);
+        }
+
+        public void putLong(String key, long value) {
+            put(key, LongValue.valueOf(value));
+        }
+
+        public void putDeepLong(String key, long value) {
+            putDeep(key, LongValue.valueOf(value));
+        }
+
+        public void putDeepLong(String key, long value, boolean force) {
+            putDeep(key, LongValue.valueOf(value), force);
+        }
+
+        public void putFloat(String key, float value) {
+            put(key, FloatValue.valueOf(value));
+        }
+
+        public void putDeepFloat(String key, float value) {
+            putDeep(key, FloatValue.valueOf(value));
+        }
+
+        public void putDeepFloat(String key, float value, boolean force) {
+            putDeep(key, FloatValue.valueOf(value), force);
+        }
+
+        public void putDouble(String key, double value) {
+            put(key, DoubleValue.valueOf(value));
+        }
+
+        public void putDeepDouble(String key, double value) {
+            putDeep(key, DoubleValue.valueOf(value));
+        }
+
+        public void putDeepDouble(String key, double value, boolean force) {
+            putDeep(key, DoubleValue.valueOf(value), force);
         }
 
         public void putString(String key, String value) {
             put(key, StringValue.valueOf(value));
         }
 
-        public void putBoolean(String key, boolean value) {
-            put(key, ByteValue.valueOf(value));
-        }
-
         public void putDeepString(String key, String value) {
-            putDeepString(key, value, false);
+            putDeep(key, StringValue.valueOf(value));
         }
 
         public void putDeepString(String key, String value, boolean force) {
             putDeep(key, StringValue.valueOf(value), force);
         }
 
+        public void putBoolean(String key, boolean value) {
+            put(key, ByteValue.valueOf(value));
+        }
+
         public void putDeepBoolean(String key, boolean value) {
-            putDeepBoolean(key, value, false);
+            putDeep(key, ByteValue.valueOf(value));
         }
 
         public void putDeepBoolean(String key, boolean value, boolean force) {
             putDeep(key, ByteValue.valueOf(value), force);
         }
 
-        public Compound getDeepCompound(String key) {
-            return getDeepCompound(key, null);
+        public void putByteArray(String key, byte[] value) {
+            put(key, new ByteArray(value));
         }
 
-        public Compound getDeepCompoundOrNull(String key) {
-            return getDeepCompound(key);
+        public void putDeepByteArray(String key, byte[] value) {
+            putDeep(key, new ByteArray(value));
         }
 
-        public Compound getDeepCompound(String key, Compound fallback) {
-            return getDeep(key) instanceof Compound value ? value : fallback;
+        public void putDeepByteArray(String key, byte[] value, boolean force) {
+            putDeep(key, new ByteArray(value), force);
         }
 
-        public ListValue getDeepList(String key) {
-            return getDeepList(key, null);
+        public void putIntArray(String key, int[] value) {
+            put(key, new IntArray(value));
         }
 
-        public ListValue getDeepListOrNull(String key) {
-            return getDeepList(key);
+        public void putDeepIntArray(String key, int[] value) {
+            putDeep(key, new IntArray(value));
         }
 
-        public ListValue getDeepList(String key, ListValue fallback) {
-            return getDeep(key) instanceof ListValue value ? value : fallback;
+        public void putDeepIntArray(String key, int[] value, boolean force) {
+            putDeep(key, new IntArray(value), force);
+        }
+
+        public void putLongArray(String key, long[] value) {
+            put(key, new LongArray(value));
+        }
+
+        public void putDeepLongArray(String key, long[] value) {
+            putDeep(key, new LongArray(value));
+        }
+
+        public void putDeepLongArray(String key, long[] value, boolean force) {
+            putDeep(key, new LongArray(value), force);
+        }
+
+        public void putByteArray(String key, List<? extends Number> value) {
+            put(key, new ByteArray(value));
+        }
+
+        public void putDeepByteArray(String key, List<? extends Number> value) {
+            putDeep(key, new ByteArray(value));
+        }
+
+        public void putDeepByteArray(String key, List<? extends Number> value, boolean force) {
+            putDeep(key, new ByteArray(value), force);
+        }
+
+        public void putIntArray(String key, List<? extends Number> value) {
+            put(key, new IntArray(value));
+        }
+
+        public void putDeepIntArray(String key, List<? extends Number> value) {
+            putDeep(key, new IntArray(value));
+        }
+
+        public void putDeepIntArray(String key, List<? extends Number> value, boolean force) {
+            putDeep(key, new IntArray(value), force);
+        }
+
+        public void putLongArray(String key, List<? extends Number> value) {
+            put(key, new LongArray(value));
+        }
+
+        public void putDeepLongArray(String key, List<? extends Number> value) {
+            putDeep(key, new LongArray(value));
+        }
+
+        public void putDeepLongArray(String key, List<? extends Number> value, boolean force) {
+            putDeep(key, new LongArray(value), force);
+        }
+
+        public ListValue getList(String key, int type) {
+            ListValue value = getList(key);
+            return value == null || (!value.isEmpty() && type != 0 && value.get(0).getId() != type)
+                    ? new ListValue()
+                    : value;
         }
 
         public void putUUID(String key, UUID value) {
-            putIntArray(key, uuidArray(value));
+            long most = value.getMostSignificantBits(), least = value.getLeastSignificantBits();
+            putIntArray(
+                    key,
+                    new int[] {(int) (most >>> 32), (int) most, (int) (least >>> 32), (int) least});
         }
 
         public UUID getUUID(String key) {
@@ -1159,7 +1088,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public UUID getUUIDOrNull(String key) {
-            return getUUID(key);
+            return getUUID(key, null);
         }
 
         public UUID getUUID(String key, UUID fallback) {
@@ -1171,7 +1100,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public UUID getDeepUUIDOrNull(String key) {
-            return getDeepUUID(key);
+            return getDeepUUID(key, null);
         }
 
         public UUID getDeepUUID(String key, UUID fallback) {
@@ -1180,25 +1109,16 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         private static UUID uuid(LegacyNbt value, LegacyNbt most, LegacyNbt least, UUID fallback) {
             if (value instanceof IntArray array) {
-                int[] parts = array.getAsIntArray();
-                return parts.length == 4
+                int[] words = array.getAsIntArray();
+                return words.length == 4
                         ? new UUID(
-                                (long) parts[0] << 32 | parts[1] & 0xffffffffL,
-                                (long) parts[2] << 32 | parts[3] & 0xffffffffL)
+                                ((long) words[0] << 32) | (words[1] & 0xffffffffL),
+                                ((long) words[2] << 32) | (words[3] & 0xffffffffL))
                         : fallback;
             }
             return most instanceof Numeric high && least instanceof Numeric low
                     ? new UUID(high.getAsLong(), low.getAsLong())
                     : fallback;
-        }
-
-        private static int[] uuidArray(UUID value) {
-            return new int[] {
-                (int) (value.getMostSignificantBits() >> 32),
-                (int) value.getMostSignificantBits(),
-                (int) (value.getLeastSignificantBits() >> 32),
-                (int) value.getLeastSignificantBits()
-            };
         }
 
         public static final class Unsafe {
@@ -1211,52 +1131,58 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
     }
 
     public abstract static class CollectionValue<E> extends LegacyNbt implements List<E> {
-        private final List<E> list =
-                new AbstractList<>() {
-                    @Override
-                    public E get(int index) {
-                        return CollectionValue.this.get(index);
-                    }
-
-                    @Override
-                    public int size() {
-                        return CollectionValue.this.size();
-                    }
-
-                    @Override
-                    public E set(int index, E value) {
-                        return CollectionValue.this.set(index, value);
-                    }
-
-                    @Override
-                    public void add(int index, E value) {
-                        CollectionValue.this.add(index, value);
-                    }
-
-                    @Override
-                    public E remove(int index) {
-                        return CollectionValue.this.remove(index);
-                    }
-                };
-
-        CollectionValue(Tag tag, Store owner) {
-            super(tag, owner);
+        private CollectionValue(int type, Tag scalar) {
+            super(type, scalar);
         }
 
-        @Override
         public abstract E get(int index);
 
-        @Override
         public abstract int size();
 
-        @Override
         public abstract E set(int index, E value);
 
-        @Override
         public abstract void add(int index, E value);
 
-        @Override
         public abstract E remove(int index);
+
+        private List<E> view() {
+            return new AbstractList<>() {
+                @Override
+                public E get(int index) {
+                    return CollectionValue.this.get(index);
+                }
+
+                @Override
+                public int size() {
+                    return CollectionValue.this.size();
+                }
+
+                @Override
+                public E set(int index, E value) {
+                    return CollectionValue.this.set(index, value);
+                }
+
+                @Override
+                public void add(int index, E value) {
+                    CollectionValue.this.add(index, value);
+                }
+
+                @Override
+                public boolean addAll(Collection<? extends E> values) {
+                    return CollectionValue.this.addAll(values);
+                }
+
+                @Override
+                public boolean addAll(int index, Collection<? extends E> values) {
+                    return CollectionValue.this.addAll(index, values);
+                }
+
+                @Override
+                public E remove(int index) {
+                    return CollectionValue.this.remove(index);
+                }
+            };
+        }
 
         @Override
         public boolean add(E value) {
@@ -1271,47 +1197,50 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public boolean contains(Object value) {
-            return list.contains(value);
+            return indexOf(value) >= 0;
         }
 
         @Override
         public Iterator<E> iterator() {
-            return list.iterator();
+            return view().iterator();
         }
 
         @Override
         public ListIterator<E> listIterator() {
-            return list.listIterator();
+            return listIterator(0);
         }
 
         @Override
         public ListIterator<E> listIterator(int index) {
-            return list.listIterator(index);
+            return view().listIterator(index);
         }
 
         @Override
         public List<E> subList(int start, int end) {
-            return list.subList(start, end);
+            return view().subList(start, end);
         }
 
         @Override
         public Object[] toArray() {
-            return list.toArray();
+            return view().toArray();
         }
 
         @Override
-        public <T> T[] toArray(T[] values) {
-            return list.toArray(values);
+        public <T> T[] toArray(T[] target) {
+            return view().toArray(target);
         }
 
         @Override
         public boolean remove(Object value) {
-            return list.remove(value);
+            int index = indexOf(value);
+            if (index < 0) return false;
+            remove(index);
+            return true;
         }
 
         @Override
         public boolean containsAll(Collection<?> values) {
-            return list.containsAll(values);
+            return view().containsAll(values);
         }
 
         @Override
@@ -1321,126 +1250,145 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public boolean addAll(int index, Collection<? extends E> values) {
-            return list.addAll(index, values);
-        }
-
-        @Override
-        public boolean removeAll(Collection<?> values) {
-            return list.removeAll(values);
-        }
-
-        @Override
-        public boolean retainAll(Collection<?> values) {
-            return list.retainAll(values);
-        }
-
-        @Override
-        public void clear() {
-            list.clear();
-        }
-
-        @Override
-        public int indexOf(Object value) {
-            return list.indexOf(value);
-        }
-
-        @Override
-        public int lastIndexOf(Object value) {
-            return list.lastIndexOf(value);
-        }
-    }
-
-    public static final class ListValue extends CollectionValue<LegacyNbt> {
-        public ListValue() {
-            this(new ListTag(), null);
-        }
-
-        private ListValue(ListTag tag, Store owner) {
-            super(tag, owner == null ? new Store(tag, null) : owner);
-        }
-
-        private ListTag list() {
-            return (ListTag) tag;
-        }
-
-        @Override
-        public int size() {
-            return list().size();
-        }
-
-        @Override
-        public LegacyNbt get(int index) {
-            return view(list().get(index), store);
-        }
-
-        @Override
-        public LegacyNbt set(int index, LegacyNbt value) {
-            Insert prepared = new Insert(value, store);
-            Tag previous =
-                    store.change(
-                            tag, node -> ((ListTag) node).set(index, prepared.value(node == tag)));
-            prepared.finish();
-            return wrap(previous);
-        }
-
-        @Override
-        public void add(int index, LegacyNbt value) {
-            Insert prepared = new Insert(value, store);
-            store.change(
-                    tag,
-                    node -> {
-                        ((ListTag) node).add(index, prepared.value(node == tag));
-                        return null;
-                    });
-            prepared.finish();
-        }
-
-        @Override
-        public boolean addAll(int index, Collection<? extends LegacyNbt> values) {
-            Set<Tag> sources = Collections.newSetFromMap(new IdentityHashMap<>());
-            List<Insert> prepared =
-                    values.stream()
-                            .map(value -> new Insert(value, store, sources.add(value.tag)))
-                            .toList();
-            boolean changed =
-                    store.change(
-                            tag,
-                            node ->
-                                    ((ListTag) node)
-                                            .addAll(
-                                                    index,
-                                                    prepared.stream()
-                                                            .map(value -> value.value(node == tag))
-                                                            .toList()));
-            prepared.forEach(Insert::finish);
+            Objects.checkIndex(index, size() + 1);
+            boolean changed = false;
+            for (E value : values) {
+                add(index++, value);
+                changed = true;
+            }
             return changed;
         }
 
         @Override
-        public LegacyNbt remove(int index) {
-            return wrap(store.change(tag, node -> ((ListTag) node).remove(index)));
+        public boolean removeAll(Collection<?> values) {
+            return view().removeAll(values);
+        }
+
+        @Override
+        public boolean retainAll(Collection<?> values) {
+            return view().retainAll(values);
         }
 
         @Override
         public void clear() {
-            store.change(
-                    tag,
-                    node -> {
-                        ((ListTag) node).clear();
-                        return null;
+            view().clear();
+        }
+
+        @Override
+        public int indexOf(Object value) {
+            return view().indexOf(value);
+        }
+
+        @Override
+        public int lastIndexOf(Object value) {
+            return view().lastIndexOf(value);
+        }
+    }
+
+    public static final class ListValue extends CollectionValue<LegacyNbt> {
+        private final List<LegacyNbt> elements = new ArrayList<>();
+
+        public ListValue() {
+            super(Type.TAG_LIST, null);
+        }
+
+        private ListValue(ListTag tag) {
+            this();
+            for (Tag value : tag) elements.add(wrap(value));
+            replaceChildren(List.of(), elements);
+        }
+
+        @Override
+        public ListTag copyTag() {
+            ListTag result = new ListTag();
+            for (LegacyNbt value : elements) result.add(value.copyTag());
+            return result;
+        }
+
+        @Override
+        public int size() {
+            return elements.size();
+        }
+
+        @Override
+        public LegacyNbt get(int index) {
+            return elements.get(index);
+        }
+
+        @Override
+        public LegacyNbt set(int index, LegacyNbt value) {
+            List<LegacyNbt> next = new ArrayList<>(elements);
+            LegacyNbt before = next.set(index, incoming(value, identities()));
+            update(next);
+            return before.clone();
+        }
+
+        @Override
+        public void add(int index, LegacyNbt value) {
+            addAll(index, List.of(value));
+        }
+
+        @Override
+        public boolean addAll(int index, Collection<? extends LegacyNbt> values) {
+            Objects.checkIndex(index, size() + 1);
+            Set<LegacyNbt> selected = identities();
+            List<LegacyNbt> additions = new ArrayList<>();
+            for (LegacyNbt value : values) additions.add(incoming(value, selected));
+            if (additions.isEmpty()) return false;
+            List<LegacyNbt> next = new ArrayList<>(elements);
+            next.addAll(index, additions);
+            update(next);
+            return true;
+        }
+
+        @Override
+        public LegacyNbt remove(int index) {
+            List<LegacyNbt> next = new ArrayList<>(elements);
+            LegacyNbt before = next.remove(index);
+            update(next);
+            return before.clone();
+        }
+
+        @Override
+        public void clear() {
+            update(List.of());
+        }
+
+        private void update(List<LegacyNbt> next) {
+            ListTag candidate = new ListTag();
+            for (LegacyNbt value : next) candidate.add(value.copyTag());
+            change(
+                    candidate,
+                    () -> {
+                        replaceChildren(elements, next);
+                        elements.clear();
+                        elements.addAll(next);
                     });
+        }
+
+        private int indexOfIdentity(LegacyNbt value) {
+            for (int index = 0; index < elements.size(); index++)
+                if (elements.get(index) == value) return index;
+            throw new IllegalStateException("Detached NBT child");
         }
 
         @Override
         public ListValue clone() {
-            return new ListValue((ListTag) copyTag(), null);
+            return new ListValue(copyTag());
         }
 
         @Override
         public int compareTo(LegacyNbt other) {
-            if (!(other instanceof ListValue value)) return super.compareTo(other);
-            return dev.itemloom.paper.compat.LegacyStateRules.compareOrdered(
-                    size(), this, value.size(), value, java.util.Comparator.naturalOrder());
+            int types = Byte.compare(getId(), other.getId());
+            if (types != 0) return types;
+            ListValue right = (ListValue) other;
+            int lengths = Integer.compare(size(), right.size());
+            if (lengths != 0) return lengths;
+            for (int index = 0; index < size(); index++) {
+                int values = get(index).compareTo(right.get(index));
+                if (values != 0) return values;
+            }
+            return 0;
         }
 
         public Compound addEmptyCompound() {
@@ -1448,8 +1396,9 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public Compound addEmptyCompound(int index) {
-            add(index, new Compound());
-            return (Compound) get(index);
+            Compound value = new Compound();
+            add(index, value);
+            return value;
         }
 
         public ListValue addEmptyList() {
@@ -1457,42 +1406,9 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public ListValue addEmptyList(int index) {
-            add(index, new ListValue());
-            return (ListValue) get(index);
-        }
-
-        public Compound getCompound(int index) {
-            return getCompound(index, null);
-        }
-
-        public Compound getCompoundOrNull(int index) {
-            return getCompound(index);
-        }
-
-        public Compound getCompound(int index, Compound fallback) {
-            return get(index) instanceof Compound value ? value : fallback;
-        }
-
-        public Compound getOrCreateCompound(int index) {
-            if (!(get(index) instanceof Compound)) set(index, new Compound());
-            return (Compound) get(index);
-        }
-
-        public ListValue getList(int index) {
-            return getList(index, null);
-        }
-
-        public ListValue getListOrNull(int index) {
-            return getList(index);
-        }
-
-        public ListValue getList(int index, ListValue fallback) {
-            return get(index) instanceof ListValue value ? value : fallback;
-        }
-
-        public ListValue getOrCreateList(int index) {
-            if (!(get(index) instanceof ListValue)) set(index, new ListValue());
-            return (ListValue) get(index);
+            ListValue value = new ListValue();
+            add(index, value);
+            return value;
         }
 
         public byte getByte(int index) {
@@ -1500,25 +1416,13 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public byte getByte(int index, byte fallback) {
-            return get(index) instanceof Numeric value ? value.getAsByte() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsByte() : fallback;
         }
 
         public Byte getByteOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsByte() : null;
-        }
-
-        public ByteValue addByte(byte value) {
-            return addByte(size(), value);
-        }
-
-        public ByteValue addByte(int index, byte value) {
-            add(index, ByteValue.valueOf(value));
-            return (ByteValue) get(index);
-        }
-
-        public ByteValue setByte(int index, byte value) {
-            set(index, ByteValue.valueOf(value));
-            return (ByteValue) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsByte() : null;
         }
 
         public short getShort(int index) {
@@ -1526,157 +1430,69 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public short getShort(int index, short fallback) {
-            return get(index) instanceof Numeric value ? value.getAsShort() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsShort() : fallback;
         }
 
         public Short getShortOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsShort() : null;
-        }
-
-        public ShortValue addShort(short value) {
-            return addShort(size(), value);
-        }
-
-        public ShortValue addShort(int index, short value) {
-            add(index, ShortValue.valueOf(value));
-            return (ShortValue) get(index);
-        }
-
-        public ShortValue setShort(int index, short value) {
-            set(index, ShortValue.valueOf(value));
-            return (ShortValue) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsShort() : null;
         }
 
         public int getInt(int index) {
-            return getInt(index, 0);
+            return getInt(index, (int) 0);
         }
 
         public int getInt(int index, int fallback) {
-            return get(index) instanceof Numeric value ? value.getAsInt() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsInt() : fallback;
         }
 
         public Integer getIntOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsInt() : null;
-        }
-
-        public IntValue addInt(int value) {
-            return addInt(size(), value);
-        }
-
-        public IntValue addInt(int index, int value) {
-            add(index, IntValue.valueOf(value));
-            return (IntValue) get(index);
-        }
-
-        public IntValue setInt(int index, int value) {
-            set(index, IntValue.valueOf(value));
-            return (IntValue) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsInt() : null;
         }
 
         public long getLong(int index) {
-            return getLong(index, 0);
+            return getLong(index, (long) 0);
         }
 
         public long getLong(int index, long fallback) {
-            return get(index) instanceof Numeric value ? value.getAsLong() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsLong() : fallback;
         }
 
         public Long getLongOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsLong() : null;
-        }
-
-        public LongValue addLong(long value) {
-            return addLong(size(), value);
-        }
-
-        public LongValue addLong(int index, long value) {
-            add(index, LongValue.valueOf(value));
-            return (LongValue) get(index);
-        }
-
-        public LongValue setLong(int index, long value) {
-            set(index, LongValue.valueOf(value));
-            return (LongValue) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsLong() : null;
         }
 
         public float getFloat(int index) {
-            return getFloat(index, 0);
+            return getFloat(index, (float) 0);
         }
 
         public float getFloat(int index, float fallback) {
-            return get(index) instanceof Numeric value ? value.getAsFloat() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsFloat() : fallback;
         }
 
         public Float getFloatOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsFloat() : null;
-        }
-
-        public FloatValue addFloat(float value) {
-            return addFloat(size(), value);
-        }
-
-        public FloatValue addFloat(int index, float value) {
-            add(index, FloatValue.valueOf(value));
-            return (FloatValue) get(index);
-        }
-
-        public FloatValue setFloat(int index, float value) {
-            set(index, FloatValue.valueOf(value));
-            return (FloatValue) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsFloat() : null;
         }
 
         public double getDouble(int index) {
-            return getDouble(index, 0);
+            return getDouble(index, (double) 0);
         }
 
         public double getDouble(int index, double fallback) {
-            return get(index) instanceof Numeric value ? value.getAsDouble() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsDouble() : fallback;
         }
 
         public Double getDoubleOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsDouble() : null;
-        }
-
-        public DoubleValue addDouble(double value) {
-            return addDouble(size(), value);
-        }
-
-        public DoubleValue addDouble(int index, double value) {
-            add(index, DoubleValue.valueOf(value));
-            return (DoubleValue) get(index);
-        }
-
-        public DoubleValue setDouble(int index, double value) {
-            set(index, DoubleValue.valueOf(value));
-            return (DoubleValue) get(index);
-        }
-
-        public ByteArray addByteArray(byte[] value) {
-            return addByteArray(size(), value);
-        }
-
-        public ByteArray addByteArray(int index, byte[] value) {
-            add(index, new ByteArray(value));
-            return (ByteArray) get(index);
-        }
-
-        public ByteArray setByteArray(int index, byte[] value) {
-            set(index, new ByteArray(value));
-            return (ByteArray) get(index);
-        }
-
-        public ByteArray addByteArray(List<? extends Number> value) {
-            return addByteArray(size(), value);
-        }
-
-        public ByteArray addByteArray(int index, List<? extends Number> value) {
-            add(index, new ByteArray(value));
-            return (ByteArray) get(index);
-        }
-
-        public ByteArray setByteArray(int index, List<? extends Number> value) {
-            set(index, new ByteArray(value));
-            return (ByteArray) get(index);
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsDouble() : null;
         }
 
         public byte[] getByteArray(int index) {
@@ -1684,39 +1500,12 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public byte[] getByteArray(int index, byte[] fallback) {
-            return get(index) instanceof ByteArray value ? value.getAsByteArray() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof ByteArray array ? array.getAsByteArray() : fallback;
         }
 
         public byte[] getByteArrayOrNull(int index) {
             return getByteArray(index, null);
-        }
-
-        public IntArray addIntArray(int[] value) {
-            return addIntArray(size(), value);
-        }
-
-        public IntArray addIntArray(int index, int[] value) {
-            add(index, new IntArray(value));
-            return (IntArray) get(index);
-        }
-
-        public IntArray setIntArray(int index, int[] value) {
-            set(index, new IntArray(value));
-            return (IntArray) get(index);
-        }
-
-        public IntArray addIntArray(List<? extends Number> value) {
-            return addIntArray(size(), value);
-        }
-
-        public IntArray addIntArray(int index, List<? extends Number> value) {
-            add(index, new IntArray(value));
-            return (IntArray) get(index);
-        }
-
-        public IntArray setIntArray(int index, List<? extends Number> value) {
-            set(index, new IntArray(value));
-            return (IntArray) get(index);
         }
 
         public int[] getIntArray(int index) {
@@ -1724,39 +1513,12 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public int[] getIntArray(int index, int[] fallback) {
-            return get(index) instanceof IntArray value ? value.getAsIntArray() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof IntArray array ? array.getAsIntArray() : fallback;
         }
 
         public int[] getIntArrayOrNull(int index) {
             return getIntArray(index, null);
-        }
-
-        public LongArray addLongArray(long[] value) {
-            return addLongArray(size(), value);
-        }
-
-        public LongArray addLongArray(int index, long[] value) {
-            add(index, new LongArray(value));
-            return (LongArray) get(index);
-        }
-
-        public LongArray setLongArray(int index, long[] value) {
-            set(index, new LongArray(value));
-            return (LongArray) get(index);
-        }
-
-        public LongArray addLongArray(List<? extends Number> value) {
-            return addLongArray(size(), value);
-        }
-
-        public LongArray addLongArray(int index, List<? extends Number> value) {
-            add(index, new LongArray(value));
-            return (LongArray) get(index);
-        }
-
-        public LongArray setLongArray(int index, List<? extends Number> value) {
-            set(index, new LongArray(value));
-            return (LongArray) get(index);
         }
 
         public long[] getLongArray(int index) {
@@ -1764,11 +1526,38 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public long[] getLongArray(int index, long[] fallback) {
-            return get(index) instanceof LongArray value ? value.getAsLongArray() : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof LongArray array ? array.getAsLongArray() : fallback;
         }
 
         public long[] getLongArrayOrNull(int index) {
             return getLongArray(index, null);
+        }
+
+        public Compound getCompound(int index) {
+            return getCompound(index, null);
+        }
+
+        public Compound getCompoundOrNull(int index) {
+            return getCompound(index, null);
+        }
+
+        public Compound getCompound(int index, Compound fallback) {
+            LegacyNbt value = get(index);
+            return value instanceof Compound typed ? typed : fallback;
+        }
+
+        public ListValue getList(int index) {
+            return getList(index, null);
+        }
+
+        public ListValue getListOrNull(int index) {
+            return getList(index, null);
+        }
+
+        public ListValue getList(int index, ListValue fallback) {
+            LegacyNbt value = get(index);
+            return value instanceof ListValue typed ? typed : fallback;
         }
 
         public String getString(int index) {
@@ -1776,7 +1565,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public String getStringOrNull(int index) {
-            return getString(index);
+            return getString(index, null);
         }
 
         public String getString(int index, String fallback) {
@@ -1789,11 +1578,125 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public Boolean getBooleanOrNull(int index) {
-            return get(index) instanceof Numeric value ? value.getAsByte() != 0 : null;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : null;
         }
 
         public boolean getBoolean(int index, boolean fallback) {
-            return get(index) instanceof Numeric value ? value.getAsByte() != 0 : fallback;
+            LegacyNbt value = get(index);
+            return value instanceof Numeric n ? n.getAsByte() != 0 : fallback;
+        }
+
+        public Compound getOrCreateCompound(int index) {
+            Compound value = getCompound(index);
+            if (value != null) return value;
+            value = new Compound();
+            set(index, value);
+            return value;
+        }
+
+        public ListValue getOrCreateList(int index) {
+            ListValue value = getList(index);
+            if (value != null) return value;
+            value = new ListValue();
+            set(index, value);
+            return value;
+        }
+
+        public ByteValue addByte(byte value) {
+            return addByte(size(), value);
+        }
+
+        public ByteValue addByte(int index, byte value) {
+            ByteValue inserted = ByteValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public ByteValue setByte(int index, byte value) {
+            ByteValue inserted = ByteValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public ShortValue addShort(short value) {
+            return addShort(size(), value);
+        }
+
+        public ShortValue addShort(int index, short value) {
+            ShortValue inserted = ShortValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public ShortValue setShort(int index, short value) {
+            ShortValue inserted = ShortValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public IntValue addInt(int value) {
+            return addInt(size(), value);
+        }
+
+        public IntValue addInt(int index, int value) {
+            IntValue inserted = IntValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public IntValue setInt(int index, int value) {
+            IntValue inserted = IntValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public LongValue addLong(long value) {
+            return addLong(size(), value);
+        }
+
+        public LongValue addLong(int index, long value) {
+            LongValue inserted = LongValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public LongValue setLong(int index, long value) {
+            LongValue inserted = LongValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public FloatValue addFloat(float value) {
+            return addFloat(size(), value);
+        }
+
+        public FloatValue addFloat(int index, float value) {
+            FloatValue inserted = FloatValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public FloatValue setFloat(int index, float value) {
+            FloatValue inserted = FloatValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public DoubleValue addDouble(double value) {
+            return addDouble(size(), value);
+        }
+
+        public DoubleValue addDouble(int index, double value) {
+            DoubleValue inserted = DoubleValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public DoubleValue setDouble(int index, double value) {
+            DoubleValue inserted = DoubleValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
         }
 
         public StringValue addString(String value) {
@@ -1801,13 +1704,15 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public StringValue addString(int index, String value) {
-            add(index, StringValue.valueOf(value));
-            return (StringValue) get(index);
+            StringValue inserted = StringValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
         }
 
         public StringValue setString(int index, String value) {
-            set(index, StringValue.valueOf(value));
-            return (StringValue) get(index);
+            StringValue inserted = StringValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
         }
 
         public ByteValue addBoolean(boolean value) {
@@ -1815,70 +1720,163 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public ByteValue addBoolean(int index, boolean value) {
-            add(index, ByteValue.valueOf(value));
-            return (ByteValue) get(index);
+            ByteValue inserted = ByteValue.valueOf(value);
+            add(index, inserted);
+            return inserted;
         }
 
         public ByteValue setBoolean(int index, boolean value) {
-            set(index, ByteValue.valueOf(value));
-            return (ByteValue) get(index);
+            ByteValue inserted = ByteValue.valueOf(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public ByteArray addByteArray(byte[] value) {
+            return addByteArray(size(), value);
+        }
+
+        public ByteArray addByteArray(int index, byte[] value) {
+            ByteArray inserted = new ByteArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public ByteArray setByteArray(int index, byte[] value) {
+            ByteArray inserted = new ByteArray(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public IntArray addIntArray(int[] value) {
+            return addIntArray(size(), value);
+        }
+
+        public IntArray addIntArray(int index, int[] value) {
+            IntArray inserted = new IntArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public IntArray setIntArray(int index, int[] value) {
+            IntArray inserted = new IntArray(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public LongArray addLongArray(long[] value) {
+            return addLongArray(size(), value);
+        }
+
+        public LongArray addLongArray(int index, long[] value) {
+            LongArray inserted = new LongArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public LongArray setLongArray(int index, long[] value) {
+            LongArray inserted = new LongArray(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public ByteArray addByteArray(List<? extends Number> value) {
+            return addByteArray(size(), value);
+        }
+
+        public ByteArray addByteArray(int index, List<? extends Number> value) {
+            ByteArray inserted = new ByteArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public ByteArray setByteArray(int index, List<? extends Number> value) {
+            ByteArray inserted = new ByteArray(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public IntArray addIntArray(List<? extends Number> value) {
+            return addIntArray(size(), value);
+        }
+
+        public IntArray addIntArray(int index, List<? extends Number> value) {
+            IntArray inserted = new IntArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public IntArray setIntArray(int index, List<? extends Number> value) {
+            IntArray inserted = new IntArray(value);
+            set(index, inserted);
+            return inserted;
+        }
+
+        public LongArray addLongArray(List<? extends Number> value) {
+            return addLongArray(size(), value);
+        }
+
+        public LongArray addLongArray(int index, List<? extends Number> value) {
+            LongArray inserted = new LongArray(value);
+            add(index, inserted);
+            return inserted;
+        }
+
+        public LongArray setLongArray(int index, List<? extends Number> value) {
+            LongArray inserted = new LongArray(value);
+            set(index, inserted);
+            return inserted;
         }
     }
 
     public abstract static class Numeric extends LegacyNbt {
-        Numeric(NumericTag value, Store owner) {
-            super(value, owner);
+        private final NumericTag number;
+
+        private Numeric(NumericTag number) {
+            super(number.getId(), number);
+            this.number = number;
         }
 
         public final byte getAsByte() {
-            return ((NumericTag) tag).byteValue();
+            return number.byteValue();
         }
 
         public final short getAsShort() {
-            return ((NumericTag) tag).shortValue();
+            return number.shortValue();
         }
 
         public final int getAsInt() {
-            return ((NumericTag) tag).intValue();
+            return number.intValue();
         }
 
         public final long getAsLong() {
-            return ((NumericTag) tag).longValue();
+            return number.longValue();
         }
 
         public final float getAsFloat() {
-            return ((NumericTag) tag).floatValue();
+            return number.floatValue();
         }
 
         public final double getAsDouble() {
-            return ((NumericTag) tag).doubleValue();
+            return number.doubleValue();
         }
 
         public final Number getAsNumber() {
-            return ((NumericTag) tag).box();
+            return number.box();
         }
 
         @Override
         public String getAsString() {
-            return getAsNumber().toString();
+            return number.box().toString();
         }
     }
 
     public static final class ByteValue extends Numeric {
-        private ByteValue(ByteTag value, Store owner) {
-            super(value, owner);
+        private ByteValue(byte value) {
+            super(ByteTag.valueOf(value));
         }
 
         public static ByteValue valueOf(byte value) {
-            return (ByteValue) wrap(ByteTag.valueOf(value));
-        }
-
-        public static ByteValue valueOf(boolean value) {
-            return valueOf((byte) (value ? 1 : 0));
-        }
-
-        public boolean getAsBoolean() {
-            return getAsByte() != 0;
+            return new ByteValue(value);
         }
 
         @Override
@@ -1888,19 +1886,26 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof ByteValue value
-                    ? Byte.compare(getAsByte(), value.getAsByte())
-                    : super.compareTo(other);
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0 ? types : Byte.compare(getAsByte(), ((Numeric) other).getAsByte());
+        }
+
+        public static ByteValue valueOf(boolean value) {
+            return valueOf((byte) (value ? 1 : 0));
+        }
+
+        public boolean getAsBoolean() {
+            return getAsByte() != 0;
         }
     }
 
     public static final class ShortValue extends Numeric {
-        private ShortValue(ShortTag value, Store owner) {
-            super(value, owner);
+        private ShortValue(short value) {
+            super(ShortTag.valueOf(value));
         }
 
         public static ShortValue valueOf(short value) {
-            return (ShortValue) wrap(ShortTag.valueOf(value));
+            return new ShortValue(value);
         }
 
         @Override
@@ -1910,19 +1915,18 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof ShortValue value
-                    ? Short.compare(getAsShort(), value.getAsShort())
-                    : super.compareTo(other);
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0 ? types : Short.compare(getAsShort(), ((Numeric) other).getAsShort());
         }
     }
 
     public static final class IntValue extends Numeric {
-        private IntValue(IntTag value, Store owner) {
-            super(value, owner);
+        private IntValue(int value) {
+            super(IntTag.valueOf(value));
         }
 
         public static IntValue valueOf(int value) {
-            return (IntValue) wrap(IntTag.valueOf(value));
+            return new IntValue(value);
         }
 
         @Override
@@ -1932,19 +1936,18 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof IntValue value
-                    ? Integer.compare(getAsInt(), value.getAsInt())
-                    : super.compareTo(other);
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0 ? types : Integer.compare(getAsInt(), ((Numeric) other).getAsInt());
         }
     }
 
     public static final class LongValue extends Numeric {
-        private LongValue(LongTag value, Store owner) {
-            super(value, owner);
+        private LongValue(long value) {
+            super(LongTag.valueOf(value));
         }
 
         public static LongValue valueOf(long value) {
-            return (LongValue) wrap(LongTag.valueOf(value));
+            return new LongValue(value);
         }
 
         @Override
@@ -1954,19 +1957,18 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof LongValue value
-                    ? Long.compare(getAsLong(), value.getAsLong())
-                    : super.compareTo(other);
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0 ? types : Long.compare(getAsLong(), ((Numeric) other).getAsLong());
         }
     }
 
     public static final class FloatValue extends Numeric {
-        private FloatValue(FloatTag value, Store owner) {
-            super(value, owner);
+        private FloatValue(float value) {
+            super(FloatTag.valueOf(value));
         }
 
         public static FloatValue valueOf(float value) {
-            return (FloatValue) wrap(FloatTag.valueOf(value));
+            return new FloatValue(value);
         }
 
         @Override
@@ -1976,19 +1978,18 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof FloatValue value
-                    ? Float.compare(getAsFloat(), value.getAsFloat())
-                    : super.compareTo(other);
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0 ? types : Float.compare(getAsFloat(), ((Numeric) other).getAsFloat());
         }
     }
 
     public static final class DoubleValue extends Numeric {
-        private DoubleValue(DoubleTag value, Store owner) {
-            super(value, owner);
+        private DoubleValue(double value) {
+            super(DoubleTag.valueOf(value));
         }
 
         public static DoubleValue valueOf(double value) {
-            return (DoubleValue) wrap(DoubleTag.valueOf(value));
+            return new DoubleValue(value);
         }
 
         @Override
@@ -1998,251 +1999,255 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public int compareTo(LegacyNbt other) {
-            return other instanceof DoubleValue value
-                    ? Double.compare(getAsDouble(), value.getAsDouble())
-                    : super.compareTo(other);
-        }
-    }
-
-    public static final class ByteArray extends CollectionValue<Byte> {
-        public ByteArray(byte[] value) {
-            this(new ByteArrayTag(value.clone()), null);
-        }
-
-        public ByteArray(List<? extends Number> value) {
-            this(array(value));
-        }
-
-        private ByteArray(ByteArrayTag value, Store owner) {
-            super(value, owner == null ? new Store(value, null) : owner);
-        }
-
-        private static byte[] array(List<? extends Number> values) {
-            byte[] result = new byte[values.size()];
-            for (int index = 0; index < result.length; index++)
-                result[index] = values.get(index) == null ? 0 : values.get(index).byteValue();
-            return result;
-        }
-
-        public byte[] getAsByteArray() {
-            return ((ByteArrayTag) tag).getAsByteArray().clone();
-        }
-
-        public byte getByte(int index) {
-            return ((ByteArrayTag) tag).getAsByteArray()[index];
-        }
-
-        @Override
-        public Byte get(int index) {
-            return getByte(index);
-        }
-
-        @Override
-        public int size() {
-            return ((ByteArrayTag) tag).size();
-        }
-
-        @Override
-        public Byte set(int index, Byte value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public void add(int index, Byte value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public Byte remove(int index) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public String getAsString() {
-            return Arrays.toString(getAsByteArray());
-        }
-
-        @Override
-        public ByteArray clone() {
-            return new ByteArray(getAsByteArray());
-        }
-
-        @Override
-        public int compareTo(LegacyNbt other) {
-            if (!(other instanceof ByteArray value)) return super.compareTo(other);
-            int length = Integer.compare(size(), value.size());
-            return length != 0 ? length : Arrays.compare(getAsByteArray(), value.getAsByteArray());
-        }
-    }
-
-    public static final class IntArray extends CollectionValue<Integer> {
-        public IntArray(int[] value) {
-            this(new IntArrayTag(value.clone()), null);
-        }
-
-        public IntArray(List<? extends Number> value) {
-            this(array(value));
-        }
-
-        private IntArray(IntArrayTag value, Store owner) {
-            super(value, owner == null ? new Store(value, null) : owner);
-        }
-
-        private static int[] array(List<? extends Number> values) {
-            int[] result = new int[values.size()];
-            for (int index = 0; index < result.length; index++)
-                result[index] = values.get(index) == null ? 0 : values.get(index).intValue();
-            return result;
-        }
-
-        public int[] getAsIntArray() {
-            return ((IntArrayTag) tag).getAsIntArray().clone();
-        }
-
-        public int getInt(int index) {
-            return ((IntArrayTag) tag).getAsIntArray()[index];
-        }
-
-        @Override
-        public Integer get(int index) {
-            return getInt(index);
-        }
-
-        @Override
-        public int size() {
-            return ((IntArrayTag) tag).size();
-        }
-
-        @Override
-        public Integer set(int index, Integer value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public void add(int index, Integer value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public Integer remove(int index) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public String getAsString() {
-            return Arrays.toString(getAsIntArray());
-        }
-
-        @Override
-        public IntArray clone() {
-            return new IntArray(getAsIntArray());
-        }
-
-        @Override
-        public int compareTo(LegacyNbt other) {
-            if (!(other instanceof IntArray value)) return super.compareTo(other);
-            int length = Integer.compare(size(), value.size());
-            return length != 0 ? length : Arrays.compare(getAsIntArray(), value.getAsIntArray());
-        }
-    }
-
-    public static final class LongArray extends CollectionValue<Long> {
-        public LongArray(long[] value) {
-            this(new LongArrayTag(value.clone()), null);
-        }
-
-        public LongArray(List<? extends Number> value) {
-            this(array(value));
-        }
-
-        private LongArray(LongArrayTag value, Store owner) {
-            super(value, owner == null ? new Store(value, null) : owner);
-        }
-
-        private static long[] array(List<? extends Number> values) {
-            long[] result = new long[values.size()];
-            for (int index = 0; index < result.length; index++)
-                result[index] = values.get(index) == null ? 0 : values.get(index).longValue();
-            return result;
-        }
-
-        public long[] getAsLongArray() {
-            return ((LongArrayTag) tag).getAsLongArray().clone();
-        }
-
-        public long getLong(int index) {
-            return ((LongArrayTag) tag).getAsLongArray()[index];
-        }
-
-        @Override
-        public Long get(int index) {
-            return getLong(index);
-        }
-
-        @Override
-        public int size() {
-            return ((LongArrayTag) tag).size();
-        }
-
-        @Override
-        public Long set(int index, Long value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public void add(int index, Long value) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public Long remove(int index) {
-            throw new UnsupportedOperationException(
-                    "NBT arrays are immutable; replace the array tag");
-        }
-
-        @Override
-        public String getAsString() {
-            return Arrays.toString(getAsLongArray());
-        }
-
-        @Override
-        public LongArray clone() {
-            return new LongArray(getAsLongArray());
-        }
-
-        @Override
-        public int compareTo(LegacyNbt other) {
-            if (!(other instanceof LongArray value)) return super.compareTo(other);
-            int length = Integer.compare(size(), value.size());
-            return length != 0 ? length : Arrays.compare(getAsLongArray(), value.getAsLongArray());
+            int types = Byte.compare(getId(), other.getId());
+            return types != 0
+                    ? types
+                    : Double.compare(getAsDouble(), ((Numeric) other).getAsDouble());
         }
     }
 
     public static final class StringValue extends LegacyNbt {
-        private StringValue(StringTag value, Store owner) {
-            super(value, owner);
+        private final String value;
+
+        private StringValue(String value) {
+            super(Type.TAG_STRING, StringTag.valueOf(Objects.requireNonNull(value)));
+            this.value = value;
         }
 
         public static StringValue valueOf(String value) {
-            return (StringValue) wrap(StringTag.valueOf(value));
+            return new StringValue(value);
         }
 
         @Override
         public String getAsString() {
-            return ((StringTag) tag).value();
+            return value;
         }
 
         @Override
         public StringValue clone() {
-            return valueOf(getAsString());
+            return valueOf(value);
+        }
+    }
+
+    public static final class ByteArray extends CollectionValue<Byte> {
+        private final byte[] values;
+
+        public ByteArray(byte[] values) {
+            super(Type.TAG_BYTE_ARRAY, new ByteArrayTag(values.clone()));
+            this.values = values.clone();
+        }
+
+        public ByteArray(List<? extends Number> values) {
+            this(numbers(values));
+        }
+
+        private static byte[] numbers(List<? extends Number> values) {
+            byte[] result = new byte[values.size()];
+            for (int index = 0; index < result.length; index++) {
+                Number value = values.get(index);
+                result[index] = value == null ? 0 : value.byteValue();
+            }
+            return result;
+        }
+
+        public byte[] getAsByteArray() {
+            return values.clone();
+        }
+
+        public byte getByte(int index) {
+            return values[index];
+        }
+
+        @Override
+        public Byte get(int index) {
+            return values[index];
+        }
+
+        @Override
+        public int size() {
+            return values.length;
+        }
+
+        @Override
+        public Byte set(int index, Byte value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public void add(int index, Byte value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public Byte remove(int index) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public String getAsString() {
+            return Arrays.toString(values);
+        }
+
+        @Override
+        public ByteArray clone() {
+            return new ByteArray(values);
+        }
+
+        @Override
+        public int compareTo(LegacyNbt other) {
+            int types = Byte.compare(getId(), other.getId());
+            if (types != 0) return types;
+            ByteArray right = (ByteArray) other;
+            int lengths = Integer.compare(size(), right.size());
+            return lengths != 0 ? lengths : Arrays.compare(values, right.values);
+        }
+    }
+
+    public static final class IntArray extends CollectionValue<Integer> {
+        private final int[] values;
+
+        public IntArray(int[] values) {
+            super(Type.TAG_INT_ARRAY, new IntArrayTag(values.clone()));
+            this.values = values.clone();
+        }
+
+        public IntArray(List<? extends Number> values) {
+            this(numbers(values));
+        }
+
+        private static int[] numbers(List<? extends Number> values) {
+            int[] result = new int[values.size()];
+            for (int index = 0; index < result.length; index++) {
+                Number value = values.get(index);
+                result[index] = value == null ? 0 : value.intValue();
+            }
+            return result;
+        }
+
+        public int[] getAsIntArray() {
+            return values.clone();
+        }
+
+        public int getInt(int index) {
+            return values[index];
+        }
+
+        @Override
+        public Integer get(int index) {
+            return values[index];
+        }
+
+        @Override
+        public int size() {
+            return values.length;
+        }
+
+        @Override
+        public Integer set(int index, Integer value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public void add(int index, Integer value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public Integer remove(int index) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public String getAsString() {
+            return Arrays.toString(values);
+        }
+
+        @Override
+        public IntArray clone() {
+            return new IntArray(values);
+        }
+
+        @Override
+        public int compareTo(LegacyNbt other) {
+            int types = Byte.compare(getId(), other.getId());
+            if (types != 0) return types;
+            IntArray right = (IntArray) other;
+            int lengths = Integer.compare(size(), right.size());
+            return lengths != 0 ? lengths : Arrays.compare(values, right.values);
+        }
+    }
+
+    public static final class LongArray extends CollectionValue<Long> {
+        private final long[] values;
+
+        public LongArray(long[] values) {
+            super(Type.TAG_LONG_ARRAY, new LongArrayTag(values.clone()));
+            this.values = values.clone();
+        }
+
+        public LongArray(List<? extends Number> values) {
+            this(numbers(values));
+        }
+
+        private static long[] numbers(List<? extends Number> values) {
+            long[] result = new long[values.size()];
+            for (int index = 0; index < result.length; index++) {
+                Number value = values.get(index);
+                result[index] = value == null ? 0 : value.longValue();
+            }
+            return result;
+        }
+
+        public long[] getAsLongArray() {
+            return values.clone();
+        }
+
+        public long getLong(int index) {
+            return values[index];
+        }
+
+        @Override
+        public Long get(int index) {
+            return values[index];
+        }
+
+        @Override
+        public int size() {
+            return values.length;
+        }
+
+        @Override
+        public Long set(int index, Long value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public void add(int index, Long value) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public Long remove(int index) {
+            throw new UnsupportedOperationException("NBT arrays are read-only");
+        }
+
+        @Override
+        public String getAsString() {
+            return Arrays.toString(values);
+        }
+
+        @Override
+        public LongArray clone() {
+            return new LongArray(values);
+        }
+
+        @Override
+        public int compareTo(LegacyNbt other) {
+            int types = Byte.compare(getId(), other.getId());
+            if (types != 0) return types;
+            LongArray right = (LongArray) other;
+            int lengths = Integer.compare(size(), right.size());
+            return lengths != 0 ? lengths : Arrays.compare(values, right.values);
         }
     }
 
@@ -2250,7 +2255,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         public static final End INSTANCE = new End();
 
         private End() {
-            super(EndTag.INSTANCE, new Store(EndTag.INSTANCE, null));
+            super(Type.TAG_END, EndTag.INSTANCE);
         }
 
         public static End instance() {
@@ -2259,27 +2264,27 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
 
         @Override
         public End clone() {
-            return this;
+            return INSTANCE;
         }
     }
 
     public static final class Type {
         private Type() {}
 
-        public static final byte TAG_END = 0,
-                TAG_BYTE = 1,
-                TAG_SHORT = 2,
-                TAG_INT = 3,
-                TAG_LONG = 4,
-                TAG_FLOAT = 5,
-                TAG_DOUBLE = 6,
-                TAG_BYTE_ARRAY = 7,
-                TAG_STRING = 8,
-                TAG_LIST = 9,
-                TAG_COMPOUND = 10,
-                TAG_INT_ARRAY = 11,
-                TAG_LONG_ARRAY = 12,
-                TAG_ANY_NUMBER = 99;
+        public static final byte TAG_END = 0;
+        public static final byte TAG_BYTE = 1;
+        public static final byte TAG_SHORT = 2;
+        public static final byte TAG_INT = 3;
+        public static final byte TAG_LONG = 4;
+        public static final byte TAG_FLOAT = 5;
+        public static final byte TAG_DOUBLE = 6;
+        public static final byte TAG_BYTE_ARRAY = 7;
+        public static final byte TAG_STRING = 8;
+        public static final byte TAG_LIST = 9;
+        public static final byte TAG_COMPOUND = 10;
+        public static final byte TAG_INT_ARRAY = 11;
+        public static final byte TAG_LONG_ARRAY = 12;
+        public static final byte TAG_ANY_NUMBER = 99;
     }
 
     public static final class Unsafe {
@@ -2290,7 +2295,7 @@ public abstract class LegacyNbt implements Comparable<LegacyNbt>, Cloneable {
         }
 
         public static LegacyNbt fromNms(Object value) {
-            return value == null ? null : wrap((Tag) value);
+            return wrap((Tag) value);
         }
     }
 }

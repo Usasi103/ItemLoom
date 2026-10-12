@@ -1,5 +1,6 @@
 package dev.itemloom.paper.integration;
 
+import dev.itemloom.paper.ItemsService;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -9,9 +10,9 @@ import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import me.clip.placeholderapi.PlaceholderAPIPlugin;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
-import dev.itemloom.paper.ItemsService;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
@@ -19,21 +20,21 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-/** Optional PAPI boundary. Async callers read prior results and never wait for Bukkit or Nashorn. */
+/** Main-thread resolver with bounded, nonblocking snapshots for asynchronous callers. */
 public final class NiPapiExpansion extends PlaceholderExpansion implements Listener, AutoCloseable {
-    private static final int MAX_RESULTS = 2048, MAX_PER_TICK = 64;
     private static final long REFRESH_NANOS = 50_000_000L;
+    private static final long WARNING_NANOS = 30_000_000_000L;
 
     private record Request(UUID viewer, String parameters) {}
 
-    private static final class Result {
+    private static final class Cached {
         final WeakReference<OfflinePlayer> viewer;
         final Object revision;
         String value = "";
         long computedAt;
         boolean pending = true;
 
-        Result(OfflinePlayer viewer, Object revision) {
+        Cached(OfflinePlayer viewer, Object revision) {
             this.viewer = new WeakReference<>(viewer);
             this.revision = revision;
         }
@@ -42,11 +43,11 @@ public final class NiPapiExpansion extends PlaceholderExpansion implements Liste
     private final JavaPlugin plugin;
     private final Supplier<Object> revision;
     private final BiFunction<OfflinePlayer, String, String> resolver;
-    private final Map<Request, Result> results = new LinkedHashMap<>(16, .75f, true);
-    private boolean scheduled;
-    private Object cacheRevision;
-    private volatile boolean closed;
+    private final LinkedHashMap<Request, Cached> results = new LinkedHashMap<>(16, 0.75f, true);
+    private Object currentRevision;
     private BukkitTask task;
+    private boolean scheduled;
+    private boolean closed;
     private long lastWarning;
 
     public NiPapiExpansion(
@@ -58,32 +59,28 @@ public final class NiPapiExpansion extends PlaceholderExpansion implements Liste
         this.resolver = resolver;
     }
 
-    /** Register before item YAML conversion so %ni_*% is recognized on the first load. */
     public static Runnable install(JavaPlugin plugin, ItemsService items) {
         ItemsService.requireThread();
         var expansion =
                 new NiPapiExpansion(plugin, items::placeholderRevision, items::requestPlaceholder);
         if (!expansion.registerIfAvailable()) {
-            plugin.getLogger()
-                    .info(
-                            "Keeping the existing NI/PAPI namespace owner; ItemLoom ni expansion was not registered");
+            plugin.getLogger().warning("无法注册 ni 占位符，保留现有提供者。");
             expansion.close();
         }
         return expansion::close;
     }
 
-    public boolean registerIfAvailable() {
+    public synchronized boolean registerIfAvailable() {
         ItemsService.requireThread();
-        if (closed
-                || Bukkit.getPluginManager().getPlugin("NeigeItems") != null
-                || registered() != null) return false;
-        // PAPI register() replaces an existing identifier; the precheck above is intentional.
-        if (!register() || registered() != this) return false;
+        if (closed || Bukkit.getPluginManager().getPlugin("NeigeItems") != null || owner() != null)
+            return false;
+        boolean registered = register();
+        if (!registered || owner() != this) return false;
         Bukkit.getPluginManager().registerEvents(this, plugin);
         return true;
     }
 
-    private static PlaceholderExpansion registered() {
+    private static PlaceholderExpansion owner() {
         return PlaceholderAPIPlugin.getInstance().getLocalExpansionManager().getExpansion("ni");
     }
 
@@ -109,134 +106,143 @@ public final class NiPapiExpansion extends PlaceholderExpansion implements Liste
 
     @Override
     public String onRequest(OfflinePlayer viewer, String parameters) {
-        if (closed) return "";
-        if (Bukkit.isPrimaryThread()) return resolver.apply(viewer, parameters);
-        Object current = revision.get();
-        if (current == null) return "";
-        Request key = new Request(viewer == null ? null : viewer.getUniqueId(), parameters);
-        String value;
-        boolean enqueue = false;
-        synchronized (results) {
+        synchronized (this) {
             if (closed) return "";
-            if (cacheRevision != current) {
-                results.clear();
-                cacheRevision = current;
-            }
-            Result result = results.get(key);
-            if (result == null || result.revision != current || result.viewer.get() != viewer) {
-                result = new Result(viewer, current);
-                if (!results.containsKey(key) && results.size() >= MAX_RESULTS)
-                    results.remove(results.keySet().iterator().next());
-                results.put(key, result);
-            }
-            value = result.value;
-            if (System.nanoTime() - result.computedAt >= REFRESH_NANOS) result.pending = true;
-            if (result.pending && !scheduled) {
-                scheduled = true;
-                enqueue = true;
-            }
         }
-        if (enqueue) schedule();
-        return value;
+        if (Bukkit.isPrimaryThread()) return resolve(viewer, parameters);
+        Object token = revision.get();
+        synchronized (this) {
+            if (closed) return "";
+            synchronizeRevision(token);
+            if (token == null) return "";
+            Request key = new Request(viewer == null ? null : viewer.getUniqueId(), parameters);
+            Cached value = results.get(key);
+            if (value == null || value.viewer.get() != viewer) {
+                value = new Cached(viewer, token);
+                results.put(key, value);
+                while (results.size() > 2048) results.pollFirstEntry();
+            } else if (System.nanoTime() - value.computedAt >= REFRESH_NANOS) {
+                value.pending = true;
+            }
+            String previous = value.value;
+            if (value.pending) schedule();
+            return previous;
+        }
+    }
+
+    private void synchronizeRevision(Object token) {
+        if (currentRevision == token) return;
+        results.clear();
+        currentRevision = token;
     }
 
     private void schedule() {
-        synchronized (results) {
-            if (closed) return;
-            try {
-                // A zero-delay task scheduled while Paper is draining tasks can run in the
-                // same heartbeat. An explicit tick is required for the per-tick batch bound.
-                task = Bukkit.getScheduler().runTaskLater(plugin, this::drain, 1);
-            } catch (RuntimeException unavailable) {
-                scheduled = false;
-                if (!closed && plugin.isEnabled()) throw unavailable;
-            }
+        if (scheduled || closed) return;
+        scheduled = true;
+        try {
+            task = Bukkit.getScheduler().runTaskLater(plugin, this::drain, 1L);
+        } catch (RuntimeException failure) {
+            scheduled = false;
+            task = null;
+            if (!closed && plugin.isEnabled()) throw failure;
         }
     }
 
     private void drain() {
-        ItemsService.requireThread();
-        var batch = new ArrayList<Map.Entry<Request, Result>>();
-        synchronized (results) {
-            if (closed) return;
-            for (var entry : results.entrySet()) {
-                if (entry.getValue().pending)
-                    batch.add(Map.entry(entry.getKey(), entry.getValue()));
-                if (batch.size() == MAX_PER_TICK) break;
-            }
-        }
-        for (var entry : batch) {
-            Request key = entry.getKey();
-            Result result = entry.getValue();
-            synchronized (results) {
-                if (closed) break;
-                if (results.get(key) != result) continue;
-            }
-            OfflinePlayer viewer = result.viewer.get();
-            String value = "";
-            if ((key.viewer() == null || viewer != null)
-                    && (!(viewer instanceof org.bukkit.entity.Player player) || player.isOnline())
-                    && result.revision == revision.get()) {
-                try {
-                    value = resolver.apply(viewer, key.parameters());
-                } catch (RuntimeException failure) {
-                    long now = System.nanoTime();
-                    if (now - lastWarning >= 30_000_000_000L) {
-                        lastWarning = now;
-                        plugin.getLogger()
-                                .log(
-                                        java.util.logging.Level.WARNING,
-                                        "Async NI placeholder failed: " + key.parameters(),
-                                        failure);
-                    }
-                }
-            }
-            synchronized (results) {
-                if (results.get(key) == result) {
-                    if (closed
-                            || result.revision != revision.get()
-                            || key.viewer() != null && viewer == null) results.remove(key);
-                    else {
-                        result.value = value;
-                        result.computedAt = System.nanoTime();
-                        result.pending = false;
-                    }
-                }
-            }
-        }
-        boolean again;
-        synchronized (results) {
-            again = !closed && results.values().stream().anyMatch(result -> result.pending);
-            scheduled = again;
+        var work = new ArrayList<Map.Entry<Request, Cached>>();
+        synchronized (this) {
             task = null;
+            if (closed) {
+                scheduled = false;
+                return;
+            }
+            synchronizeRevision(revision.get());
+            for (var entry : results.entrySet()) {
+                if (entry.getValue().pending) work.add(Map.entry(entry.getKey(), entry.getValue()));
+                if (work.size() == 64) break;
+            }
         }
-        if (again) schedule();
+        for (var entry : work) {
+            Request key = entry.getKey();
+            Cached value = entry.getValue();
+            OfflinePlayer viewer = value.viewer.get();
+            synchronized (this) {
+                if (!current(key, value)) continue;
+                if ((key.viewer != null && viewer == null)
+                        || (viewer instanceof Player player && !player.isOnline())) {
+                    results.remove(key);
+                    continue;
+                }
+            }
+            String resolved = resolve(viewer, key.parameters);
+            synchronized (this) {
+                if (!current(key, value)) continue;
+                value.value = resolved;
+                value.computedAt = System.nanoTime();
+                value.pending = false;
+            }
+        }
+        synchronized (this) {
+            scheduled = false;
+            if (!closed && results.values().stream().anyMatch(value -> value.pending)) schedule();
+        }
+    }
+
+    private boolean current(Request key, Cached value) {
+        if (closed) return false;
+        Object token = revision.get();
+        synchronizeRevision(token);
+        // Iteration does not alter the access order used to choose the next batch.
+        Cached present = null;
+        for (var entry : results.entrySet())
+            if (entry.getKey().equals(key)) {
+                present = entry.getValue();
+                break;
+            }
+        if (present != value) return false;
+        if (value.revision != token || token == null) {
+            results.remove(key);
+            return false;
+        }
+        return true;
+    }
+
+    private String resolve(OfflinePlayer viewer, String parameters) {
+        synchronized (this) {
+            if (closed) return "";
+        }
+        try {
+            String value = resolver.apply(viewer, parameters);
+            synchronized (this) {
+                return closed || value == null ? "" : value;
+            }
+        } catch (RuntimeException failure) {
+            synchronized (this) {
+                long now = System.nanoTime();
+                if (lastWarning == 0 || now - lastWarning >= WARNING_NANOS) {
+                    lastWarning = now;
+                    plugin.getLogger().warning("ni 占位符解析失败: " + failure.getMessage());
+                }
+            }
+            return "";
+        }
     }
 
     @EventHandler
-    public void quit(PlayerQuitEvent event) {
-        UUID id = event.getPlayer().getUniqueId();
-        synchronized (results) {
-            results.keySet().removeIf(key -> id.equals(key.viewer()));
-        }
+    public synchronized void quit(PlayerQuitEvent event) {
+        UUID viewer = event.getPlayer().getUniqueId();
+        results.keySet().removeIf(key -> viewer.equals(key.viewer));
     }
 
     @Override
-    public void close() {
-        ItemsService.requireThread();
-        synchronized (results) {
-            if (closed) return;
-            closed = true;
-            results.clear();
-            cacheRevision = null;
-            scheduled = false;
-            if (task != null) {
-                task.cancel();
-                task = null;
-            }
-        }
+    public synchronized void close() {
+        if (closed) return;
+        closed = true;
+        if (task != null) task.cancel();
+        task = null;
+        scheduled = false;
+        results.clear();
         HandlerList.unregisterAll(this);
-        // unregister() deletes by identifier in PAPI 2.12.3; never remove a replacement owner.
-        if (registered() == this) unregister();
+        if (owner() == this) unregister();
     }
 }

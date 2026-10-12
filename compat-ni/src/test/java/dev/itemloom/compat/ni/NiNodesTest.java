@@ -188,6 +188,8 @@ class NiNodesTest {
             assertEquals("<number::bad_1>", legacy.text("<number::bad_1>"));
             assertEquals("<number::1_1_bad>", modern.text("<number::1_1_bad>"));
             assertEquals("1", legacy.text("<number::1_1_bad>"));
+            assertEquals("0", modern.text("<number::__0>"));
+            assertEquals("<number::__0>", legacy.text("<number::__0>"));
             assertEquals("100", modern.text("<gaussian::100_0_0>"));
             assertEquals("100.0", legacy.text("<gaussian::100_0_0>"));
             assertEquals("0", modern.text("<calculation::missing.function() >"));

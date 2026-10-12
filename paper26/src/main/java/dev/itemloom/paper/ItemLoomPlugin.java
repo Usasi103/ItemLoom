@@ -1,19 +1,27 @@
 package dev.itemloom.paper;
 
+import dev.itemloom.api.ItemLoom;
+import dev.itemloom.paper.command.ItemCommands;
+import dev.itemloom.paper.integration.MythicDrops;
+import dev.itemloom.paper.integration.NiPapiExpansion;
+import dev.itemloom.paper.integration.PapiBridge;
 import dev.keystone.Keystone;
+import dev.keystone.storage.StorageWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.function.BiFunction;
-import dev.itemloom.api.ItemLoom;
-import dev.itemloom.paper.integration.PapiBridge;
+import java.util.logging.Level;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
+/** Platform entry owns startup order and guarantees cleanup after partial initialization. */
 public final class ItemLoomPlugin extends JavaPlugin {
     private ItemsService items;
-    private Runnable closePlaceholders = () -> {};
-    private AutoCloseable closeMythic = () -> {};
-    private dev.itemloom.paper.command.ItemCommands commands;
+    private ItemCommands commands;
+    private AutoCloseable mythic;
+    private Runnable closePlaceholders;
+    private boolean stopped;
 
     @Override
     public void onLoad() {
@@ -22,65 +30,82 @@ public final class ItemLoomPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        stopped = false;
         try {
             Path own = getDataFolder().toPath();
-            Path legacy = own.resolveSibling("NeigeItems");
+            Files.createDirectories(own);
+            Path sibling = own.resolveSibling("NeigeItems");
             Path input =
                     !Files.isDirectory(own.resolve("Items"))
                                     && !Files.isDirectory(own.resolve("SX-Item"))
-                                    && Files.isDirectory(legacy.resolve("Items"))
-                            ? legacy
+                                    && Files.isDirectory(sibling.resolve("Items"))
+                            ? sibling
                             : own;
-            Files.createDirectories(own);
-            BiFunction<Object, String, String> placeholders = (player, value) -> null;
-            if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI"))
-                placeholders = new PapiBridge();
+            boolean papi = Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI");
+            BiFunction<Object, String, String> placeholders =
+                    papi ? new PapiBridge() : (viewer, text) -> null;
             items = new ItemsService(this, input, placeholders);
-            if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI"))
-                closePlaceholders =
-                        dev.itemloom.paper.integration.NiPapiExpansion.install(this, items);
-            if (!items.reload(getServer().getConsoleSender())) {
-                getServer().getPluginManager().disablePlugin(this);
+            if (papi) {
+                closePlaceholders = NiPapiExpansion.install(this, items);
+            }
+            if (!items.reload(Bukkit.getConsoleSender())) {
+                Bukkit.getPluginManager().disablePlugin(this);
                 return;
             }
-            getServer()
-                    .getServicesManager()
+            Bukkit.getServicesManager()
                     .register(ItemLoom.class, items, this, ServicePriority.Normal);
-            closeMythic = dev.itemloom.paper.integration.MythicDrops.install(this, items);
-            commands = new dev.itemloom.paper.command.ItemCommands(this, items);
+            mythic = MythicDrops.install(this, items);
+            commands = new ItemCommands(this, items);
             commands.register();
-            getServer().getScheduler().runTask(this, items::serverEnabled);
-            getLogger()
-                    .info("ItemLoom loaded " + items.ids().size() + " definitions from " + input);
-        } catch (Exception error) {
-            getLogger()
-                    .log(java.util.logging.Level.SEVERE, "ItemLoom initialization failed", error);
-            getServer().getPluginManager().disablePlugin(this);
+            Bukkit.getScheduler().runTask(this, items::serverEnabled);
+            getLogger().info("Loaded " + items.ids().size() + " items from " + input);
+        } catch (Exception failure) {
+            getLogger().log(Level.SEVERE, "ItemLoom initialization failed", failure);
+            Bukkit.getPluginManager().disablePlugin(this);
         }
     }
 
     @Override
     public void onDisable() {
-        if (commands != null) commands.close();
-        getServer().getServicesManager().unregisterAll(this);
-        getServer().getScheduler().cancelTasks(this);
+        if (stopped) {
+            return;
+        }
+        stopped = true;
         try {
-            try {
+            close(commands, "command jobs");
+            commands = null;
+            Bukkit.getServicesManager().unregisterAll(this);
+            Bukkit.getScheduler().cancelTasks(this);
+            close(mythic, "Mythic integration");
+            mythic = null;
+            if (closePlaceholders != null) {
                 try {
-                    closeMythic.close();
-                } catch (Exception error) {
+                    closePlaceholders.run();
+                } catch (RuntimeException failure) {
                     getLogger()
-                            .log(
-                                    java.util.logging.Level.WARNING,
-                                    "Mythic bridge shutdown failed",
-                                    error);
+                            .log(Level.WARNING, "Could not close placeholder integration", failure);
+                } finally {
+                    closePlaceholders = null;
                 }
-                closePlaceholders.run();
-            } finally {
-                if (items != null) items.close();
             }
         } finally {
-            dev.keystone.storage.StorageWriter.shutdown();
+            try {
+                close(items, "item runtime");
+                items = null;
+            } finally {
+                StorageWriter.shutdown();
+            }
+        }
+    }
+
+    private void close(AutoCloseable resource, String description) {
+        if (resource == null) {
+            return;
+        }
+        try {
+            resource.close();
+        } catch (Exception failure) {
+            getLogger().log(Level.WARNING, "Could not close " + description, failure);
         }
     }
 }

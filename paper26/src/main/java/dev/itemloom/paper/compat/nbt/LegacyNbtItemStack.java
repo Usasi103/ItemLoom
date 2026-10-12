@@ -1,34 +1,27 @@
 package dev.itemloom.paper.compat.nbt;
 
+import dev.itemloom.paper.compat.NiItemMigration;
+import dev.itemloom.paper.compat.NiItemNodes;
+import dev.itemloom.paper.nms.ItemStateCodec;
 import java.util.ConcurrentModificationException;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.component.CustomData;
-import dev.itemloom.paper.compat.NiItemMigration;
-import dev.itemloom.paper.compat.NiItemNodes;
-import dev.itemloom.paper.nms.ItemStateCodec;
-import dev.itemloom.paper.nms.NmsItems;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.inventory.ItemStack;
 
-/** A legacy custom-data view that keeps the independent storage envelope on the actual item. */
+/** Keeps the original stack and reconciles each script view's changes with its current data. */
 public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>, Cloneable {
     private static final String LEGACY_KEY = "NeigeItems";
     private static final ItemStateCodec CODEC = new ItemStateCodec();
     private static final NiItemMigration MIGRATION = new NiItemMigration();
-    private static final Set<String> MODELED_STATE =
+    private static final Set<String> MODELED_FIELDS =
             Set.of("schema", "id", "rolls", "null_rolls", "properties", "compat_ni_rolls");
-    private static final java.util.Comparator<LegacyNbtItemStack> ORDER =
-            dev.itemloom.paper.compat.LegacyStateRules.itemOrder(
-                    value -> value.item.getType().ordinal(),
-                    value -> value.item.getAmount(),
-                    value -> value.item.getDurability(),
-                    LegacyNbtItemStack::getTag,
-                    java.util.Comparator.naturalOrder());
     private final ItemStack item;
 
     public LegacyNbtItemStack(ItemStack item) {
@@ -37,8 +30,8 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
 
     public LegacyNbt.Compound getTag() {
         synchronized (item) {
-            if (CraftItemStack.unwrap(item).get(DataComponents.CUSTOM_DATA) == null) return null;
-            return liveView();
+            CompoundTag projection = projection();
+            return projection == null ? null : LegacyNbt.Compound.live(projection, this);
         }
     }
 
@@ -48,113 +41,22 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
 
     public LegacyNbt.Compound getOrCreateTag() {
         synchronized (item) {
-            if (CraftItemStack.unwrap(item).get(DataComponents.CUSTOM_DATA) == null)
-                install(new CompoundTag());
-            return liveView();
-        }
-    }
-
-    private LegacyNbt.Compound liveView() {
-        CompoundTag original = NmsItems.customData(item);
-        checkExistingState(original);
-        return LegacyNbt.linked(NiItemNodes.legacyData(item), item, this::commit);
-    }
-
-    private void commit(CompoundTag previous, CompoundTag candidate) {
-        synchronized (item) {
-            CompoundTag current = NmsItems.customData(item);
-            checkExistingState(current);
-            CompoundTag projection = NiItemNodes.legacyData(item);
-            CompoundTag merged =
-                    (CompoundTag) merge(previous, candidate, projection, "custom_data");
-            CompoundTag translated = translate(merged, current);
-            if (!translated.equals(current)) install(translated);
-        }
-    }
-
-    /** Replaces custom_data as requested by the caller; every other item component is retained. */
-    public void setTag(LegacyNbt.Compound compound) {
-        CompoundTag candidate = Objects.requireNonNull(compound, "compound").copyTag();
-        synchronized (item) {
-            CompoundTag current = NmsItems.customData(item);
-            checkExistingState(current);
-            install(translate(candidate, current));
-        }
-    }
-
-    private static void checkExistingState(CompoundTag current) {
-        CODEC.read(current); // Unknown/corrupt schema is never silently overwritten by a script.
-        if (current.contains(ItemStateCodec.KEY) && current.contains(LEGACY_KEY))
-            MIGRATION.convert(current);
-    }
-
-    private static CompoundTag translate(CompoundTag projection, CompoundTag current) {
-        CompoundTag candidate = projection.copy();
-        if (!candidate.contains(LEGACY_KEY)) {
-            CODEC.read(candidate);
-            return candidate; // Removing the complete legacy record explicitly removes identity.
-        }
-        if (MIGRATION.read(candidate).isEmpty())
-            throw new IllegalArgumentException("Legacy item metadata must contain a valid id");
-        if (candidate.contains(ItemStateCodec.KEY)) {
-            if (!CODEC.read(candidate).equals(MIGRATION.read(candidate))) {
-                throw new IllegalArgumentException("Conflicting modern and legacy item identity");
+            LegacyNbt.Compound current = getTag();
+            if (current != null) {
+                return current;
             }
-            candidate.remove(ItemStateCodec.KEY);
+            write(new CompoundTag());
+            return getTag();
         }
-        CompoundTag converted = MIGRATION.convert(candidate);
-        CompoundTag convertedState = converted.getCompoundOrEmpty(ItemStateCodec.KEY);
-        CompoundTag state = current.getCompoundOrEmpty(ItemStateCodec.KEY).copy();
-        // Preserve fields a future independent runtime may add; replace all modeled fields so
-        // removed null rolls and a compound-to-JSON data change cannot leave stale projections.
-        MODELED_STATE.forEach(state::remove);
-        convertedState
-                .entrySet()
-                .forEach(entry -> state.put(entry.getKey(), entry.getValue().copy()));
-        converted.put(ItemStateCodec.KEY, state);
-        CODEC.read(converted);
-        return converted;
     }
 
-    /** Merge only this handle's edits, preserving independent changes to other custom-data keys. */
-    private static Tag merge(Tag before, Tag changed, Tag current, String path) {
-        if (Objects.equals(before, changed)) return copy(current);
-        if (before instanceof CompoundTag oldMap
-                && changed instanceof CompoundTag newMap
-                && current instanceof CompoundTag currentMap) {
-            CompoundTag result = currentMap.copy();
-            Set<String> keys = new LinkedHashSet<>(oldMap.keySet());
-            keys.addAll(newMap.keySet());
-            for (String key : keys) {
-                Tag value =
-                        merge(
-                                oldMap.get(key),
-                                newMap.get(key),
-                                currentMap.get(key),
-                                path + "." + key);
-                if (value == null) result.remove(key);
-                else result.put(key, value);
-            }
-            return result;
+    public void setTag(LegacyNbt.Compound tag) {
+        CompoundTag candidate = Objects.requireNonNull(tag, "tag").copyTag();
+        synchronized (item) {
+            CompoundTag current = raw();
+            validateExisting(current);
+            write(translate(candidate, current));
         }
-        if (!Objects.equals(current, before) && !Objects.equals(current, changed)) {
-            throw new ConcurrentModificationException(
-                    "Item NBT changed through another handle: " + path);
-        }
-        return copy(changed);
-    }
-
-    private static Tag copy(Tag tag) {
-        return tag == null ? null : tag.copy();
-    }
-
-    private void install(CompoundTag data) {
-        var handle = CraftItemStack.unwrap(item);
-        if (handle.isEmpty())
-            throw new IllegalArgumentException("Cannot attach custom data to an empty item");
-        // The sole live write occurs after all parsing/identity/conflict checks succeed. Do not
-        // round-trip ItemMeta, which could discard components absent from its Bukkit model.
-        handle.set(DataComponents.CUSTOM_DATA, CustomData.of(data.copy()));
     }
 
     public ItemStack asItemStack() {
@@ -166,7 +68,7 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
     }
 
     public ItemStack asBukkitCopy() {
-        return CraftItemStack.asBukkitCopy(CraftItemStack.unwrap(item));
+        return CraftItemStack.asBukkitCopy(CraftItemStack.asNMSCopy(item));
     }
 
     public ItemStack asCraftCopy() {
@@ -174,7 +76,7 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
     }
 
     public boolean isBukkitItemStack() {
-        return !(item instanceof CraftItemStack);
+        return !isCraftItemStack();
     }
 
     public boolean isCraftItemStack() {
@@ -188,12 +90,12 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
 
     @Override
     public LegacyNbtItemStack clone() {
-        return new LegacyNbtItemStack(item.clone());
+        return new LegacyNbtItemStack(asCopy());
     }
 
     @Override
-    public boolean equals(Object other) {
-        return other instanceof LegacyNbtItemStack value && item.equals(value.item);
+    public boolean equals(Object value) {
+        return value instanceof LegacyNbtItemStack other && item.equals(other.item);
     }
 
     @Override
@@ -202,7 +104,145 @@ public final class LegacyNbtItemStack implements Comparable<LegacyNbtItemStack>,
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int compareTo(LegacyNbtItemStack other) {
-        return ORDER.compare(this, other);
+        int materials = Integer.compare(item.getType().ordinal(), other.item.getType().ordinal());
+        if (materials != 0) {
+            return materials;
+        }
+        int amounts = Integer.compare(item.getAmount(), other.item.getAmount());
+        if (amounts != 0) {
+            return amounts;
+        }
+        int durability = Short.compare(item.getDurability(), other.item.getDurability());
+        if (durability != 0) {
+            return durability;
+        }
+        LegacyNbt.Compound left = getTag();
+        LegacyNbt.Compound right = other.getTag();
+        if (left == null) {
+            return right == null ? 0 : -1;
+        }
+        return right == null ? 1 : left.compareTo(right);
+    }
+
+    boolean sameTarget(ItemStack target) {
+        return item == target || CraftItemStack.unwrap(item) == CraftItemStack.unwrap(target);
+    }
+
+    void commit(CompoundTag before, CompoundTag desired) {
+        synchronized (item) {
+            CompoundTag currentRaw = raw();
+            validateExisting(currentRaw);
+            CompoundTag currentView = projection();
+            Tag merged = merge(before, desired, currentView, "");
+            if (merged == null) {
+                return;
+            }
+            CompoundTag translated = translate((CompoundTag) merged, currentRaw);
+            if (!translated.equals(currentRaw)) {
+                write(translated);
+            }
+        }
+    }
+
+    private CompoundTag raw() {
+        CustomData data = CraftItemStack.unwrap(item).get(DataComponents.CUSTOM_DATA);
+        return data == null ? null : data.copyTag();
+    }
+
+    private CompoundTag projection() {
+        CompoundTag current = raw();
+        if (current == null) {
+            return null;
+        }
+        validateExisting(current);
+        return NiItemNodes.legacyData(item);
+    }
+
+    private static void validateExisting(CompoundTag current) {
+        if (current == null) {
+            return;
+        }
+        CODEC.read(current);
+        if (current.contains(ItemStateCodec.KEY) && current.contains(LEGACY_KEY)) {
+            MIGRATION.convert(current);
+        }
+    }
+
+    private void write(CompoundTag tag) {
+        var handle = CraftItemStack.unwrap(item);
+        if (handle.isEmpty()) {
+            throw new IllegalArgumentException("An empty item cannot hold custom data");
+        }
+        handle.set(DataComponents.CUSTOM_DATA, CustomData.of(tag.copy()));
+    }
+
+    private static CompoundTag translate(CompoundTag projection, CompoundTag previous) {
+        CompoundTag candidate = projection.copy();
+        var nativeIdentity = CODEC.read(candidate);
+        Tag legacy = candidate.get(LEGACY_KEY);
+        if (legacy != null) {
+            if (!(legacy instanceof CompoundTag old)
+                    || !(old.get("id") instanceof StringTag)
+                    || old.getStringOr("id", "").isBlank()) {
+                throw new IllegalArgumentException("NeigeItems requires a nonblank string id");
+            }
+            var identity =
+                    MIGRATION
+                            .read(candidate)
+                            .orElseThrow(
+                                    () -> new IllegalArgumentException("Missing legacy identity"));
+            if (nativeIdentity.isPresent() && !nativeIdentity.get().equals(identity)) {
+                throw new IllegalArgumentException("Conflicting native and legacy item identities");
+            }
+            candidate.remove(ItemStateCodec.KEY);
+            candidate = MIGRATION.convert(candidate);
+            if (previous != null
+                    && previous.get(ItemStateCodec.KEY) instanceof CompoundTag existing) {
+                CODEC.read(previous);
+                CompoundTag combined = existing.copy();
+                MODELED_FIELDS.forEach(combined::remove);
+                CompoundTag converted = candidate.getCompoundOrEmpty(ItemStateCodec.KEY);
+                for (String key : converted.keySet()) {
+                    combined.put(key, converted.get(key).copy());
+                }
+                candidate.put(ItemStateCodec.KEY, combined);
+            }
+        }
+        CODEC.read(candidate);
+        return candidate;
+    }
+
+    private static Tag merge(Tag before, Tag desired, Tag current, String path) {
+        if (Objects.equals(before, desired)) {
+            return copy(current);
+        }
+        if (before instanceof CompoundTag old
+                && desired instanceof CompoundTag next
+                && current instanceof CompoundTag live) {
+            CompoundTag result = live.copy();
+            Set<String> keys = new LinkedHashSet<>(old.keySet());
+            keys.addAll(next.keySet());
+            for (String key : keys) {
+                String nestedPath = path.isEmpty() ? key : path + "." + key;
+                Tag merged = merge(old.get(key), next.get(key), live.get(key), nestedPath);
+                if (merged == null) {
+                    result.remove(key);
+                } else {
+                    result.put(key, merged);
+                }
+            }
+            return result;
+        }
+        if (!Objects.equals(current, before) && !Objects.equals(current, desired)) {
+            throw new ConcurrentModificationException(
+                    "NBT changed at " + (path.isEmpty() ? "<root>" : path));
+        }
+        return copy(desired);
+    }
+
+    private static Tag copy(Tag value) {
+        return value == null ? null : value.copy();
     }
 }

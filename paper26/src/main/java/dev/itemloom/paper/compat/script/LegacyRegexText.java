@@ -1,98 +1,78 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.function.UnaryOperator;
-import java.util.regex.MatchResult;
-import java.util.regex.Pattern;
+import java.util.regex.*;
 
-/** Regex text operations with the legacy editor's replacement and lore rules. */
 final class LegacyRegexText {
-    private static final Pattern GROUP_REFERENCE = Pattern.compile("\\$([0-9]+)");
+    record Rule(String pattern, String replacement) {}
+
+    private record Applied(String text, boolean matched) {}
 
     private LegacyRegexText() {}
 
     static String name(
             String text, List<Rule> rules, boolean all, UnaryOperator<String> transform) {
-        if (text == null) {
-            return null;
-        }
-        String result = text;
-        for (Rule rule : rules) {
-            result = apply(result, rule, all, transform).text();
-        }
-        return result;
+        if (text == null) return null;
+        for (Rule rule : rules) text = apply(text, rule, all, transform).text;
+        return text;
     }
 
     static List<String> lore(
             List<String> lines, List<Rule> rules, boolean all, UnaryOperator<String> transform) {
-        if (lines == null) {
-            return null;
-        }
+        if (lines == null) return null;
         List<Rule> available = new ArrayList<>(rules);
         List<String> result = new ArrayList<>();
         for (String line : lines) {
-            String text = line;
-            Iterator<Rule> remaining = available.iterator();
-            while (remaining.hasNext()) {
-                Applied applied = apply(line, remaining.next(), all, transform);
-                text = applied.text();
-                if (!all && applied.matched()) {
-                    remaining.remove();
-                }
+            String output = line;
+            for (Iterator<Rule> iterator = available.iterator(); iterator.hasNext(); ) {
+                Applied applied = apply(line, iterator.next(), all, transform);
+                output = applied.text;
+                if (!all && applied.matched) iterator.remove();
             }
-            long copies = 1 + text.chars().filter(character -> character == '\n').count();
-            for (long copy = 0; copy < copies; copy++) {
-                result.add(text);
-            }
+            int copies = 1;
+            for (int i = 0; i < output.length(); i++) if (output.charAt(i) == '\n') copies++;
+            for (int i = 0; i < copies; i++) result.add(output);
         }
         return result;
     }
 
     private static Applied apply(
-            String text, Rule rule, boolean all, UnaryOperator<String> transform) {
-        Iterator<MatchResult> matches =
-                Pattern.compile(rule.pattern())
-                        .matcher(text)
-                        .results()
-                        .limit(all ? Long.MAX_VALUE : 1)
-                        .iterator();
-        if (!matches.hasNext()) {
-            return new Applied(text, false);
-        }
+            String source, Rule rule, boolean all, UnaryOperator<String> transform) {
+        Matcher match = Pattern.compile(rule.pattern).matcher(source);
+        if (!match.find()) return new Applied(source, false);
         StringBuilder result = new StringBuilder();
-        int copiedUntil = 0;
-        while (matches.hasNext()) {
-            MatchResult match = matches.next();
-            result.append(text, copiedUntil, match.start());
-            String expanded = expandGroups(rule.replacement(), match);
-            result.append(Objects.requireNonNull(transform.apply(expanded)));
-            copiedUntil = match.end();
-        }
-        return new Applied(result.append(text, copiedUntil, text.length()).toString(), true);
+        int end = 0;
+        do {
+            result.append(source, end, match.start());
+            result.append(Objects.requireNonNull(transform.apply(groups(rule.replacement, match))));
+            end = match.end();
+        } while (all && match.find());
+        result.append(source, end, source.length());
+        return new Applied(result.toString(), true);
     }
 
-    private static String expandGroups(String replacement, MatchResult match) {
-        Iterator<MatchResult> references =
-                GROUP_REFERENCE.matcher(replacement).results().iterator();
+    private static String groups(String replacement, Matcher match) {
         StringBuilder result = new StringBuilder();
-        int copiedUntil = 0;
-        while (references.hasNext()) {
-            MatchResult reference = references.next();
-            result.append(replacement, copiedUntil, reference.start());
-            int group = Integer.parseInt(reference.group(1));
-            result.append(
-                    group <= match.groupCount()
-                            ? Objects.toString(match.group(group), "")
-                            : reference.group());
-            copiedUntil = reference.end();
+        for (int i = 0; i < replacement.length(); ) {
+            int end = i + 1;
+            if (replacement.charAt(i) == '$') {
+                while (end < replacement.length()
+                        && replacement.charAt(end) >= '0'
+                        && replacement.charAt(end) <= '9') end++;
+                if (end > i + 1) {
+                    int group = Integer.parseInt(replacement.substring(i + 1, end));
+                    if (group <= match.groupCount()) {
+                        String value = match.group(group);
+                        if (value != null) result.append(value);
+                        i = end;
+                        continue;
+                    }
+                }
+            }
+            result.append(replacement, i, end);
+            i = end;
         }
-        return result.append(replacement, copiedUntil, replacement.length()).toString();
+        return result.toString();
     }
-
-    record Rule(String pattern, String replacement) {}
-
-    private record Applied(String text, boolean matched) {}
 }

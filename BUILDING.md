@@ -97,8 +97,10 @@ plugins only for the integration scenarios being exercised. Check the server's s
 startup, individual JSON assertions, errors, and normal shutdown; the process exit code alone
 does not establish that all scenarios passed.
 
-For the 2.5.0 replacements, run `ilprobe source-replacement` with the same new probe
-JAR against 2.4.0 and the candidate in separate, sequential Paper 26.2 instances.
+For the 2.6.0 rewrite, run `ilprobe source-replacement` against the released 2.5.0
+and the candidate in separate, sequential Paper 26.2 instances. Keep that probe's
+observation schema identical; probes that instantiate changed internal runtime
+constructors need version-appropriate fixture wiring.
 Compare the `observations` objects in `plugins/ItemLoomProbe/source-replacement.json`,
 including value types and expected exception classes. Top-level string values
 are recorded as UTF-16 code units so isolated surrogate results remain exact.
@@ -112,6 +114,21 @@ probes alongside the unit tests for execution paths outside this observation set
 
 Synthetic players and events do not test actual client rendering, prediction, or network load.
 Record real-client and stress testing separately. Do not load the probe on a live server.
+
+## Configuration census
+
+`tools/inventory.py` reads configuration and script text without executing scripts or
+reading upstream implementation source. It requires Python 3 and PyYAML. Supply one
+or more `--config` directories and an `--output` path outside every input directory:
+
+```text
+python -B tools/inventory.py --config /path/to/NI-data --config /path/to/SX-data --output /path/to/evidence/config-inventory.json
+```
+
+The default `--format auto` recognizes NI and SX directory layouts. Use `--format ni`
+or `--format sx` to select one format explicitly. The report lists definitions,
+configuration fields, script references and parse errors; it does not establish
+runtime compatibility. Keep private configuration reports outside the public repository.
 
 ## Prepare a release
 

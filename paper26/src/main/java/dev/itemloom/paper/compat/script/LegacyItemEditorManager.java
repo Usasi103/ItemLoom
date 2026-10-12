@@ -1,47 +1,29 @@
 package dev.itemloom.paper.compat.script;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
+import com.google.gson.*;
+import dev.itemloom.compat.ni.*;
+import dev.itemloom.paper.compat.LegacyStateRules;
+import dev.itemloom.paper.compat.nbt.*;
+import dev.itemloom.paper.nms.NmsItems;
+import java.util.*;
+import java.util.function.*;
 import java.util.regex.Pattern;
-import net.minecraft.core.component.DataComponentType;
-import net.minecraft.core.component.DataComponents;
-import dev.itemloom.compat.ni.NiTagValues;
-import dev.itemloom.compat.ni.NiTemplate;
-import dev.itemloom.paper.compat.nbt.LegacyNbt;
-import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
-import org.bukkit.Material;
+import net.minecraft.core.component.*;
+import org.bukkit.*;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.craftbukkit.util.CraftMagicNumbers;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemFlag;
-import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 
-/**
- * NI editor-language contract, implemented against the current item components.
- * Behavioral reference: NeigeItems ca93bc4f ItemEditorManager/ItemManager (GPL-3.0).
- * Execute on the server thread; action hosts must dispatch before entering this adapter.
- */
-@SuppressWarnings("deprecation")
+/** Script editor vocabulary, with detached preparation for individual component changes. */
 public final class LegacyItemEditorManager {
     @FunctionalInterface
     public interface Editor {
         Boolean apply(Player player, ItemStack item, String content);
     }
 
-    /** Generation is owned by the independent item service, never by this script adapter. */
     public interface Host {
         Material material(String content);
 
@@ -49,7 +31,6 @@ public final class LegacyItemEditorManager {
 
         String section(Player player, ItemStack item, String content);
 
-        /** amount=null skips splitting; otherwise split/give and generation belong to the host transaction. */
         boolean refresh(
                 Player player,
                 ItemStack item,
@@ -62,8 +43,8 @@ public final class LegacyItemEditorManager {
 
     public final LegacyItemEditorManager INSTANCE = this;
     private final Host host;
-    private final HashMap<String, Editor> itemEditors = new HashMap<>();
-    private final ArrayList<String> editorNames = new ArrayList<>();
+    private final HashMap<String, Editor> editors = new HashMap<>();
+    private final ArrayList<String> names = new ArrayList<>();
 
     public LegacyItemEditorManager(Host host) {
         this.host = Objects.requireNonNull(host);
@@ -71,11 +52,11 @@ public final class LegacyItemEditorManager {
     }
 
     public HashMap<String, Editor> getItemEditors() {
-        return itemEditors;
+        return editors;
     }
 
     public ArrayList<String> getEditorNames() {
-        return editorNames;
+        return names;
     }
 
     public void runEditor(String id, String content, ItemStack item, Player player) {
@@ -83,90 +64,62 @@ public final class LegacyItemEditorManager {
     }
 
     public Boolean runEditorWithResult(String id, String content, ItemStack item, Player player) {
-        Editor editor = itemEditors.get(id.toLowerCase(Locale.getDefault()));
+        Editor editor = editors.get(id.toLowerCase(Locale.getDefault()));
         if (editor == null) return null;
-        mainThread();
+        thread();
         return editor.apply(player, item, content);
     }
 
     public void addItemEditor(String id, Editor function) {
-        editorNames.add(id);
-        itemEditors.put(
-                id.toLowerCase(Locale.getDefault()),
+        String key = id.toLowerCase(Locale.getDefault());
+        names.add(id);
+        editors.put(
+                key,
                 function == null
                         ? null
-                        : (player, item, content) -> {
-                            mainThread();
-                            return function.apply(player, item, content);
+                        : (player, item, text) -> {
+                            thread();
+                            return function.apply(player, item, text);
                         });
     }
 
     public void reload() {
-        itemEditors.clear();
-        editorNames.clear();
-        Map<String, Editor> basic = new HashMap<>();
-        basic.put(
-                "setMaterial",
-                (p, item, text) -> {
-                    if (empty(item)) return false;
-                    Material material = host.material(text);
-                    if (material == null) return false;
-                    if (material.isAir()) item.setType(material);
-                    else {
-                        var type = CraftMagicNumbers.getItem(material);
-                        if (type == null) return false;
-                        // CraftItemStack.setType additionally round-trips ItemMeta. Preserve the
-                        // existing patch, including components unknown to that Bukkit meta model.
-                        CraftItemStack.unwrap(item).setItem(type);
-                    }
-                    return true;
-                });
+        editors.clear();
+        names.clear();
+        Map<String, Editor> base = new HashMap<>();
+        base.put("setMaterial", (player, item, text) -> material(item, text));
         for (String operation : List.of("set", "add", "take")) {
-            basic.put(
-                    operation + "Amount",
-                    (p, item, text) -> {
-                        Integer value = integer(text);
-                        if (empty(item) || value == null) return false;
-                        int amount =
-                                switch (operation) {
-                                    case "add" -> item.getAmount() + value;
-                                    case "take" -> item.getAmount() - value;
-                                    default -> value;
-                                };
-                        item.setAmount(
-                                Math.min(Math.max(amount, 0), item.getType().getMaxStackSize()));
-                        return true;
-                    });
-            basic.put(operation + "Damage", (p, item, text) -> editDamage(item, text, operation));
+            base.put(operation + "Amount", (player, item, text) -> amount(item, text, operation));
+            base.put(operation + "Damage", (player, item, text) -> damage(item, text, operation));
         }
-        basic.put(
+        base.put(
                 "setName",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.CUSTOM_NAME,
                                 value -> value.setDisplayName(color(text))));
-        basic.put(
+        base.put(
                 "addNamePrefix",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.CUSTOM_NAME,
                                 value ->
                                         value.setDisplayName(
                                                 color(text) + value.getDisplayName())));
-        basic.put(
+        base.put(
                 "addNamePostfix",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.CUSTOM_NAME,
                                 value ->
                                         value.setDisplayName(
                                                 value.getDisplayName() + color(text))));
-        basic.put(
+        base.put(
                 "setLore",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.LORE,
@@ -177,32 +130,57 @@ public final class LegacyItemEditorManager {
                                                                 .split(
                                                                         Pattern.quote("\\n"),
                                                                         -1)))));
-        basic.put(
+        base.put(
                 "addLore",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.LORE,
                                 value -> {
-                                    List<String> lore = value.getLore();
-                                    if (lore == null) lore = new ArrayList<>();
+                                    List<String> lore =
+                                            value.hasLore()
+                                                    ? new ArrayList<>(value.getLore())
+                                                    : new ArrayList<>();
                                     lore.addAll(
                                             Arrays.asList(
                                                     color(text).split(Pattern.quote("\\n"), -1)));
                                     value.setLore(lore);
                                 }));
-        for (boolean lore : new boolean[] {false, true})
-            for (boolean all : new boolean[] {false, true}) {
-                String name = (all ? "replaceAll" : "replace") + (lore ? "Lore" : "Name");
-                basic.put(name, (p, item, text) -> replaceLiteral(item, text, lore, all));
-                for (String suffix : List.of("", "Papi", "Section"))
-                    basic.put(
-                            name + "Regex" + suffix,
-                            (p, item, text) -> replaceRegex(p, item, text, lore, all, suffix));
+        for (boolean lore : List.of(false, true))
+            for (boolean all : List.of(false, true)) {
+                String id = (all ? "replaceAll" : "replace") + (lore ? "Lore" : "Name");
+                base.put(
+                        id,
+                        (player, item, text) ->
+                                replace(item, text, lore, all, false, UnaryOperator.identity()));
+                addItemEditor(
+                        id + "Regex",
+                        (player, item, text) ->
+                                replace(item, text, lore, all, true, UnaryOperator.identity()));
+                addItemEditor(
+                        id + "RegexPapi",
+                        (player, item, text) ->
+                                replace(
+                                        item,
+                                        text,
+                                        lore,
+                                        all,
+                                        true,
+                                        replacement -> host.papi(player, replacement)));
+                addItemEditor(
+                        id + "RegexSection",
+                        (player, item, text) ->
+                                replace(
+                                        item,
+                                        text,
+                                        lore,
+                                        all,
+                                        true,
+                                        replacement -> host.section(player, item, replacement)));
             }
-        basic.put(
+        base.put(
                 "setCustomModelData",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.CUSTOM_MODEL_DATA,
@@ -210,145 +188,123 @@ public final class LegacyItemEditorManager {
                                     Integer number = integer(text);
                                     if (number != null) value.setCustomModelData(number);
                                 }));
-        basic.put(
+        base.put(
                 "setUnbreakable",
-                (p, item, text) ->
+                (player, item, text) ->
                         meta(
                                 item,
                                 DataComponents.UNBREAKABLE,
                                 value -> {
-                                    String bool = text.toLowerCase(Locale.getDefault());
-                                    if (bool.equals("true") || bool.equals("false"))
-                                        value.setUnbreakable(Boolean.parseBoolean(bool));
+                                    String flag = text.toLowerCase(Locale.getDefault());
+                                    if (flag.equals("true") || flag.equals("false"))
+                                        value.setUnbreakable(flag.equals("true"));
                                 }));
         for (String operation :
                 List.of("set", "add", "addNotCover", "remove", "levelUp", "levelDown"))
-            basic.put(
+            base.put(
                     operation + "Enchantment",
-                    (p, item, text) -> enchantments(item, text, operation));
+                    (player, item, text) -> enchant(item, text, operation));
         for (String operation : List.of("set", "add", "remove"))
-            basic.put(
-                    operation + "ItemFlag",
-                    (p, item, text) ->
-                            meta(
-                                    item,
-                                    DataComponents.TOOLTIP_DISPLAY,
-                                    value -> {
-                                        if (operation.equals("set"))
-                                            value.removeItemFlags(
-                                                    value.getItemFlags().toArray(new ItemFlag[0]));
-                                        for (String token : text.split(" ", -1))
-                                            try {
-                                                ItemFlag flag = ItemFlag.valueOf(token);
-                                                if (operation.equals("remove"))
-                                                    value.removeItemFlags(flag);
-                                                else value.addItemFlags(flag);
-                                            } catch (IllegalArgumentException ignored) {
-                                            }
-                                    }));
-        basic.put("setNBT", (p, item, text) -> nbt(item, text, false));
-        basic.put("setNBTWithList", (p, item, text) -> nbt(item, text, true));
-        basic.put(
+            base.put(operation + "ItemFlag", (player, item, text) -> flags(item, text, operation));
+        base.put("setNBT", (player, item, text) -> nbt(item, text, false));
+        base.put("setNBTWithList", (player, item, text) -> nbt(item, text, true));
+        base.put(
                 "refresh",
-                (p, item, text) ->
-                        !empty(item)
+                (player, item, text) ->
+                        !air(item)
                                 && host.refresh(
-                                        p, item, NiTemplate.split(text, ' ', 0), null, null));
-        basic.put("rebuild", (p, item, text) -> host.rebuild(p, item, stringMap(text)));
-        basic.put(
+                                        player, item, NiTemplate.split(text, ' ', 0), null, null));
+        base.put("rebuild", (player, item, text) -> host.rebuild(player, item, strings(text)));
+        base.put(
                 "refreshAmount",
-                (p, item, text) -> {
-                    if (empty(item)) return false;
+                (player, item, text) -> {
+                    if (air(item)) return false;
                     List<String> parts = NiTemplate.split(text, ' ', 0);
                     return host.refresh(
-                            p,
+                            player,
                             item,
-                            parts.subList(1, parts.size()),
+                            new ArrayList<>(parts.subList(1, parts.size())),
                             null,
-                            splitAmount(parts.getFirst()));
+                            requestedAmount(parts.getFirst()));
                 });
-        basic.put(
+        base.put(
                 "rebuildAmount",
-                (p, item, text) -> {
-                    if (empty(item)) return false;
-                    String[] parts = text.split(" ", 2);
-                    // This historical name deliberately uses refresh's custom_data-only policy.
+                (player, item, text) -> {
+                    if (air(item)) return false;
+                    int split = text.indexOf(' ');
+                    String quantity = split < 0 ? text : text.substring(0, split);
+                    String overrides = split < 0 ? null : text.substring(split + 1);
                     return host.refresh(
-                            p,
-                            item,
-                            null,
-                            stringMap(parts.length == 1 ? "" : parts[1]),
-                            splitAmount(parts[0]));
+                            player, item, null, strings(overrides), requestedAmount(quantity));
                 });
-        numbers(
-                basic,
+        stateEditors(
+                base,
                 "Charge",
                 LegacyItemEditorManager::setCharge,
                 LegacyItemEditorManager::addCharge);
-        numbers(
-                basic,
+        stateEditors(
+                base,
                 "MaxCharge",
                 LegacyItemEditorManager::setMaxCharge,
                 LegacyItemEditorManager::addMaxCharge);
-        numbers(
-                basic,
+        stateEditors(
+                base,
                 "CustomDurability",
                 LegacyItemEditorManager::setCustomDurability,
                 LegacyItemEditorManager::addCustomDurability);
-        numbers(
-                basic,
+        stateEditors(
+                base,
                 "MaxCustomDurability",
                 LegacyItemEditorManager::setMaxCustomDurability,
                 LegacyItemEditorManager::addMaxCustomDurability);
-        basic.forEach(
-                (id, function) -> {
-                    addItemEditor(id, function);
-                    if (!id.contains("Regex")) {
-                        addItemEditor(
-                                id + "Papi",
-                                (p, item, text) -> function.apply(p, item, host.papi(p, text)));
-                        addItemEditor(
-                                id + "Section",
-                                (p, item, text) ->
-                                        function.apply(p, item, host.section(p, item, text)));
-                    }
+        base.forEach(
+                (id, editor) -> {
+                    addItemEditor(id, editor);
+                    addItemEditor(
+                            id + "Papi",
+                            (player, item, text) ->
+                                    editor.apply(player, item, host.papi(player, text)));
+                    addItemEditor(
+                            id + "Section",
+                            (player, item, text) ->
+                                    editor.apply(player, item, host.section(player, item, text)));
                 });
     }
 
-    private static void numbers(
-            Map<String, Editor> editors,
-            String suffix,
-            BiConsumer<ItemStack, Integer> set,
-            BiConsumer<ItemStack, Integer> add) {
-        editors.put(
-                "set" + suffix,
-                (p, item, text) -> {
-                    Integer value = integer(text);
-                    if (value != null) set.accept(item, value);
+    private static void stateEditors(
+            Map<String, Editor> into,
+            String field,
+            ObjIntConsumer<ItemStack> set,
+            ObjIntConsumer<ItemStack> add) {
+        into.put(
+                "set" + field,
+                (player, item, text) -> {
+                    Integer amount = integer(text);
+                    if (amount != null) set.accept(item, amount);
                     return true;
                 });
-        editors.put(
-                "add" + suffix,
-                (p, item, text) -> {
-                    Integer value = integer(text);
-                    if (value != null) add.accept(item, value);
+        into.put(
+                "add" + field,
+                (player, item, text) -> {
+                    Integer amount = integer(text);
+                    if (amount != null) add.accept(item, amount);
                     return false;
                 });
-        editors.put(
-                "take" + suffix,
-                (p, item, text) -> {
-                    Integer value = integer(text);
-                    if (value != null) add.accept(item, -value);
+        into.put(
+                "take" + field,
+                (player, item, text) -> {
+                    Integer amount = integer(text);
+                    if (amount != null) add.accept(item, -amount);
                     return false;
                 });
     }
 
-    private static void mainThread() {
-        if (!Bukkit.isPrimaryThread())
+    private static void thread() {
+        if (Bukkit.getServer() != null && !Bukkit.isPrimaryThread())
             throw new IllegalStateException("Item editors must execute on the server thread");
     }
 
-    private static boolean empty(ItemStack item) {
+    private static boolean air(ItemStack item) {
         return item.getType() == Material.AIR;
     }
 
@@ -364,32 +320,63 @@ public final class LegacyItemEditorManager {
         }
     }
 
-    private static int splitAmount(String text) {
+    private static int requestedAmount(String text) {
+        Integer amount = integer(text);
+        return amount == null ? 1 : Math.max(1, amount);
+    }
+
+    private boolean material(ItemStack item, String text) {
+        if (air(item)) return false;
+        Material type = host.material(text);
+        if (type == null) return false;
+        if (type.isAir()) {
+            item.setType(type);
+            return true;
+        }
+        var nativeType = CraftMagicNumbers.getItem(type);
+        if (nativeType == null) return false;
+        var candidate = CraftItemStack.asNMSCopy(item);
+        candidate.setItem(nativeType);
+        NmsItems.replace(item, CraftItemStack.asBukkitCopy(candidate));
+        return true;
+    }
+
+    private static boolean amount(ItemStack item, String text, String operation) {
         Integer value = integer(text);
-        return value == null ? 1 : Math.max(value, 1);
+        if (air(item) || value == null) return false;
+        int amount =
+                switch (operation) {
+                    case "add" -> item.getAmount() + value;
+                    case "take" -> item.getAmount() - value;
+                    default -> value;
+                };
+        item.setAmount(Math.clamp(amount, 0, item.getType().getMaxStackSize()));
+        return true;
     }
 
-    private static HashMap<String, String> stringMap(String text) {
-        if (text == null || text.isBlank() || text.trim().equals("null")) return null;
-        var json = JsonParser.parseString(text).getAsJsonObject();
-        HashMap<String, String> values = new HashMap<>();
-        json.entrySet()
-                .forEach(
-                        entry -> {
-                            JsonElement value = entry.getValue();
-                            if (!value.isJsonNull()
-                                    && (!value.isJsonPrimitive()
-                                            || !value.getAsJsonPrimitive().isString()))
-                                throw new IllegalArgumentException(
-                                        "Editor value is not a string: " + entry.getKey());
-                            values.put(
-                                    entry.getKey(),
-                                    value.isJsonNull() ? null : value.getAsString());
-                        });
-        return values;
+    private static boolean damage(ItemStack item, String text, String operation) {
+        short value;
+        try {
+            value = Short.parseShort(text);
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+        if (air(item)) return false;
+        short current = item.getDurability();
+        short damage =
+                switch (operation) {
+                    case "add" -> (short) (current + value);
+                    case "take" -> (short) (current - value);
+                    default -> value;
+                };
+        short maximum = item.getType().getMaxDurability();
+        if (maximum != 0 && damage > maximum) item.setAmount(0);
+        else
+            setComponent(
+                    item, DataComponents.DAMAGE, maximum == 0 ? (int) damage : Math.max(0, damage));
+        return true;
     }
 
-    /** Use Bukkit's exact legacy text/flag conversion on a detached copy, then commit only its named component. */
     private static boolean meta(
             ItemStack item, DataComponentType<?> component, Consumer<ItemMeta> edit) {
         return component(
@@ -404,194 +391,237 @@ public final class LegacyItemEditorManager {
                 });
     }
 
-    private static <T> boolean component(
-            ItemStack item, DataComponentType<T> component, Consumer<ItemStack> edit) {
-        if (empty(item)) return false;
-        ItemStack copy = CraftItemStack.asCraftCopy(item);
+    private static boolean component(
+            ItemStack item, DataComponentType<?> component, Consumer<CraftItemStack> edit) {
+        if (air(item)) return false;
+        CraftItemStack copy = CraftItemStack.asCraftCopy(item);
         edit.accept(copy);
-        T value = CraftItemStack.unwrap(copy).get(component);
-        var target = CraftItemStack.unwrap(item);
-        if (value == null) target.remove(component);
-        else target.set(component, value);
+        copyComponent(item, component, copy.handle);
         return true;
     }
 
-    private static boolean editDamage(ItemStack item, String text, String operation) {
-        if (empty(item)) return false;
-        short value;
-        try {
-            value = Short.parseShort(text);
-        } catch (NumberFormatException ignored) {
-            return false;
-        }
-        short damage =
-                switch (operation) {
-                    case "add" -> (short) (item.getDurability() + value);
-                    case "take" -> (short) (item.getDurability() - value);
-                    default -> value;
-                };
-        short max = item.getType().getMaxDurability();
-        if (max != 0 && damage > max) item.setAmount(0);
-        else writeDamage(item, max == 0 ? damage : (short) Math.max(damage, 0));
-        return true;
-    }
-
-    private static void writeDamage(ItemStack item, short damage) {
-        component(item, DataComponents.DAMAGE, copy -> copy.setDurability(damage));
-    }
-
-    private static boolean replaceLiteral(
-            ItemStack item, String content, boolean lore, boolean all) {
-        return meta(
-                item,
-                lore ? DataComponents.LORE : DataComponents.CUSTOM_NAME,
-                meta -> {
-                    if (lore ? !meta.hasLore() : !meta.hasDisplayName()) return;
-                    Map<String, String> rules = stringMap(color(content));
-                    if (rules.isEmpty()) return;
-                    if (lore) meta.setLore(LegacyLiteralText.lore(meta.getLore(), rules, all));
-                    else
-                        meta.setDisplayName(
-                                LegacyLiteralText.name(meta.getDisplayName(), rules, all));
-                });
-    }
-
-    private boolean replaceRegex(
-            Player player,
+    private static <T> void copyComponent(
             ItemStack item,
-            String content,
+            DataComponentType<T> component,
+            net.minecraft.world.item.ItemStack source) {
+        setComponent(item, component, source.get(component));
+    }
+
+    private static <T> void setComponent(ItemStack item, DataComponentType<T> component, T value) {
+        var candidate = CraftItemStack.asNMSCopy(item);
+        if (value == null) candidate.remove(component);
+        else candidate.set(component, value);
+        NmsItems.replace(item, CraftItemStack.asBukkitCopy(candidate));
+    }
+
+    private static boolean replace(
+            ItemStack item,
+            String text,
             boolean lore,
             boolean all,
-            String expansion) {
+            boolean regex,
+            UnaryOperator<String> transform) {
         return meta(
                 item,
                 lore ? DataComponents.LORE : DataComponents.CUSTOM_NAME,
                 meta -> {
                     if (lore ? !meta.hasLore() : !meta.hasDisplayName()) return;
-                    List<LegacyRegexText.Rule> rules =
-                            stringMap(color(content)).entrySet().stream()
-                                    .map(
-                                            entry ->
-                                                    new LegacyRegexText.Rule(
-                                                            entry.getKey(), entry.getValue()))
-                                    .toList();
-                    if (rules.isEmpty()) return;
-                    java.util.function.UnaryOperator<String> expand =
-                            switch (expansion) {
-                                case "Papi" -> value -> host.papi(player, value);
-                                case "Section" -> value -> host.section(player, item, value);
-                                default -> java.util.function.UnaryOperator.identity();
-                            };
-                    if (lore)
-                        meta.setLore(LegacyRegexText.lore(meta.getLore(), rules, all, expand));
-                    else
-                        meta.setDisplayName(
-                                LegacyRegexText.name(meta.getDisplayName(), rules, all, expand));
+                    Map<String, String> replacements = strings(color(text));
+                    if (!regex) {
+                        if (lore)
+                            meta.setLore(LegacyLiteralText.lore(meta.getLore(), replacements, all));
+                        else
+                            meta.setDisplayName(
+                                    LegacyLiteralText.name(
+                                            meta.getDisplayName(), replacements, all));
+                    } else {
+                        List<LegacyRegexText.Rule> rules = new ArrayList<>();
+                        replacements.forEach(
+                                (pattern, replacement) ->
+                                        rules.add(new LegacyRegexText.Rule(pattern, replacement)));
+                        if (lore)
+                            meta.setLore(
+                                    LegacyRegexText.lore(meta.getLore(), rules, all, transform));
+                        else
+                            meta.setDisplayName(
+                                    LegacyRegexText.name(
+                                            meta.getDisplayName(), rules, all, transform));
+                    }
                 });
     }
 
-    private static boolean enchantments(ItemStack item, String content, String operation) {
+    private static HashMap<String, String> strings(String text) {
+        if (text == null || text.isBlank() || text.trim().equals("null")) return null;
+        HashMap<String, String> result = new HashMap<>();
+        JsonParser.parseString(text)
+                .getAsJsonObject()
+                .entrySet()
+                .forEach(
+                        entry -> {
+                            JsonElement value = entry.getValue();
+                            if (!value.isJsonNull()
+                                    && !(value.isJsonPrimitive()
+                                            && value.getAsJsonPrimitive().isString()))
+                                throw new IllegalArgumentException(
+                                        "Editor value is not a string: " + entry.getKey());
+                            result.put(
+                                    entry.getKey(),
+                                    value.isJsonNull() ? null : value.getAsString());
+                        });
+        return result;
+    }
+
+    private static boolean enchant(ItemStack item, String text, String operation) {
         return component(
                 item,
                 DataComponents.ENCHANTMENTS,
                 copy -> {
                     if (operation.equals("set")) copy.removeEnchantments();
                     if (operation.equals("remove")) {
-                        for (String name : content.split(" ", -1)) {
+                        for (String token : text.split(" ", -1)) {
                             Enchantment enchantment =
-                                    Enchantment.getByName(name.toUpperCase(Locale.getDefault()));
+                                    Enchantment.getByName(token.toUpperCase(Locale.getDefault()));
                             if (enchantment != null) copy.removeEnchantment(enchantment);
                         }
                         return;
                     }
-                    HashMap<String, Integer> values = new HashMap<>();
-                    JsonParser.parseString(content)
+                    Map<String, Integer> levels = new HashMap<>();
+                    JsonParser.parseString(text)
                             .getAsJsonObject()
                             .entrySet()
                             .forEach(
                                     entry -> {
-                                        if (!entry.getValue().isJsonPrimitive()
-                                                || !entry.getValue().getAsJsonPrimitive().isNumber()
-                                                || !entry.getValue().toString().matches("-?\\d+"))
+                                        JsonElement value = entry.getValue();
+                                        if (!value.isJsonPrimitive()
+                                                || !value.getAsJsonPrimitive().isNumber()
+                                                || !value.getAsString().matches("-?\\d+"))
                                             throw new IllegalArgumentException(
                                                     "Enchantment level is not an integer: "
                                                             + entry.getKey());
-                                        values.put(
-                                                entry.getKey(),
-                                                entry.getValue().getAsBigDecimal().intValueExact());
+                                        try {
+                                            levels.put(
+                                                    entry.getKey(),
+                                                    Integer.valueOf(value.getAsString()));
+                                        } catch (NumberFormatException error) {
+                                            throw new IllegalArgumentException(
+                                                    "Enchantment level is not an integer: "
+                                                            + entry.getKey(),
+                                                    error);
+                                        }
                                     });
-                    values.forEach(
-                            (name, amount) -> {
+                    levels.forEach(
+                            (name, requested) -> {
                                 Enchantment enchantment =
                                         Enchantment.getByName(
                                                 name.toUpperCase(Locale.getDefault()));
                                 if (enchantment == null) return;
+                                if (operation.equals("addNotCover")
+                                        && copy.containsEnchantment(enchantment)) return;
                                 if (operation.equals("levelUp") || operation.equals("levelDown")) {
-                                    if (amount == 0) return;
+                                    if (requested == 0) return;
                                     int level =
-                                            copy.getEnchantmentLevel(enchantment)
-                                                    + (operation.equals("levelDown")
-                                                            ? -amount
-                                                            : amount);
+                                            operation.equals("levelUp")
+                                                    ? copy.getEnchantmentLevel(enchantment)
+                                                            + requested
+                                                    : copy.getEnchantmentLevel(enchantment)
+                                                            - requested;
                                     if (level <= 0) copy.removeEnchantment(enchantment);
                                     else copy.addUnsafeEnchantment(enchantment, level);
-                                } else if (amount > 0
-                                        && (!operation.equals("addNotCover")
-                                                || !copy.containsEnchantment(enchantment)))
-                                    copy.addUnsafeEnchantment(enchantment, amount);
+                                } else if (requested > 0)
+                                    copy.addUnsafeEnchantment(enchantment, requested);
                             });
                 });
     }
 
-    private static boolean nbt(ItemStack item, String content, boolean lists) {
-        if (empty(item)) return false;
-        HashMap<String, String> values = stringMap(content);
-        var wrapper = new LegacyNbtItemStack(item);
-        LegacyNbt.Compound original = wrapper.getTag();
-        LegacyNbt.Compound candidate =
-                original == null ? new LegacyNbt.Compound() : original.clone();
-        values.forEach(
-                (key, text) -> {
-                    LegacyNbt value =
-                            LegacyNbt.of(
-                                    NiTagValues.decode(Objects.requireNonNull(text, "NBT value")));
-                    if (lists) LegacyItemEditorManagerNbt.put(candidate, key, value);
-                    else candidate.putDeep(key, value);
+    private static boolean flags(ItemStack item, String text, String operation) {
+        return meta(
+                item,
+                DataComponents.TOOLTIP_DISPLAY,
+                meta -> {
+                    if (operation.equals("set")) meta.removeItemFlags(ItemFlag.values());
+                    for (String token : text.split(" ", -1)) {
+                        try {
+                            ItemFlag flag = ItemFlag.valueOf(token);
+                            if (operation.equals("remove")) meta.removeItemFlags(flag);
+                            else meta.addItemFlags(flag);
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
                 });
+    }
+
+    private static boolean nbt(ItemStack item, String text, boolean lists) {
+        if (air(item)) return false;
+        LegacyNbtItemStack wrapper = new LegacyNbtItemStack(item);
+        LegacyNbt.Compound previous = wrapper.getTag();
+        LegacyNbt.Compound candidate =
+                previous == null ? new LegacyNbt.Compound() : previous.clone();
+        strings(text)
+                .forEach(
+                        (key, value) -> {
+                            LegacyNbt tag =
+                                    LegacyNbt.of(
+                                            NiTagValues.decode(
+                                                    Objects.requireNonNull(value, "NBT value")));
+                            if (lists) LegacyItemEditorManagerNbt.put(candidate, key, tag);
+                            else candidate.putDeep(key, tag);
+                        });
         wrapper.setTag(candidate);
         return true;
     }
 
     private static LegacyNbt.Compound properties(ItemStack item) {
-        mainThread();
+        thread();
         if (item == null || item.isEmpty()) return null;
-        LegacyNbt.Compound root = new LegacyNbtItemStack(item).getTag();
-        return root == null ? null : root.getCompound("NeigeItems");
+        LegacyNbt.Compound tag = new LegacyNbtItemStack(item).getTag();
+        return tag == null ? null : tag.getCompoundOrNull("NeigeItems");
     }
 
     public static void setCharge(ItemStack item, int amount) {
-        var data = properties(item);
+        LegacyNbt.Compound data = properties(item);
         if (data == null) return;
-        Integer max = data.getIntOrNull("maxCharge");
-        if (max != null) data.putInt("charge", Math.max(Math.min(amount, max), 0));
+        Integer maximum = data.getIntOrNull("maxCharge");
+        if (maximum != null) data.putInt("charge", Math.max(0, Math.min(amount, maximum)));
     }
 
     public static void addCharge(ItemStack item, int amount) {
-        var data = properties(item);
+        LegacyNbt.Compound data = properties(item);
         if (data == null) return;
-        Integer current = data.getIntOrNull("charge");
-        if (current == null) return;
-        int next = Math.max(Math.min(current + amount, data.getInt("maxCharge")), 0);
-        if (next == 0) item.setAmount(0);
-        else data.putInt("charge", next);
+        Integer old = data.getIntOrNull("charge");
+        if (old == null) return;
+        int current = Math.max(0, Math.min(old + amount, data.getInt("maxCharge")));
+        if (current == 0) item.setAmount(0);
+        else data.putInt("charge", current);
     }
 
     public static void setMaxCharge(ItemStack item, int amount) {
-        max(item, amount, false, false);
+        maximum(item, amount, false, false);
     }
 
     public static void addMaxCharge(ItemStack item, int amount) {
-        max(item, amount, true, false);
+        maximum(item, amount, true, false);
+    }
+
+    public static void setMaxCustomDurability(ItemStack item, int amount) {
+        maximum(item, amount, false, true);
+    }
+
+    public static void addMaxCustomDurability(ItemStack item, int amount) {
+        maximum(item, amount, true, true);
+    }
+
+    private static void maximum(ItemStack item, int amount, boolean add, boolean durability) {
+        LegacyNbt.Compound data = properties(item);
+        if (data == null) return;
+        String currentKey = durability ? "durability" : "charge",
+                maximumKey = durability ? "maxDurability" : "maxCharge";
+        Integer required = data.getIntOrNull(add ? maximumKey : currentKey);
+        if (required == null) return;
+        int maximum = Math.max(1, add ? required + amount : amount);
+        int current = Math.min(data.getInt(currentKey), maximum);
+        data.putInt(maximumKey, maximum);
+        data.putInt(currentKey, current);
+        if (durability) refreshDurability(item, current, maximum);
     }
 
     public static void setCustomDurability(ItemStack item, int amount) {
@@ -602,51 +632,26 @@ public final class LegacyItemEditorManager {
         durability(item, amount, true);
     }
 
-    public static void setMaxCustomDurability(ItemStack item, int amount) {
-        max(item, amount, false, true);
-    }
-
-    public static void addMaxCustomDurability(ItemStack item, int amount) {
-        max(item, amount, true, true);
-    }
-
-    private static void max(ItemStack item, int amount, boolean add, boolean durability) {
-        var data = properties(item);
-        if (data == null) return;
-        String valueKey = durability ? "durability" : "charge",
-                maxKey = durability ? "maxDurability" : "maxCharge";
-        Integer required = data.getIntOrNull(add ? maxKey : valueKey);
-        if (required == null) return;
-        int maximum = Math.max(add ? required + amount : amount, 1);
-        int current = Math.min(data.getInt(valueKey), maximum);
-        LegacyNbt.Compound edits = new LegacyNbt.Compound();
-        edits.putInt(valueKey, current);
-        edits.putInt(maxKey, maximum);
-        data.putAll(edits);
-        if (durability) refreshDurability(item, current, maximum);
-    }
-
     private static void durability(ItemStack item, int amount, boolean add) {
-        var data = properties(item);
+        LegacyNbt.Compound data = properties(item);
         if (data == null) return;
         Integer required = data.getIntOrNull(add ? "durability" : "maxDurability");
         if (required == null) return;
-        int max = data.getInt("maxDurability");
-        int current = Math.max(Math.min(add ? required + amount : amount, max), 0);
+        int maximum = data.getInt("maxDurability");
+        int current = Math.max(0, Math.min(add ? required + amount : amount, maximum));
         if (current == 0 && data.getBoolean("itemBreak", true)) item.setAmount(0);
         else {
             data.putInt("durability", current);
-            refreshDurability(item, current, max);
+            refreshDurability(item, current, maximum);
         }
     }
 
-    public static short checkDurability(ItemStack item, int current, int max) {
-        return dev.itemloom.paper.compat.LegacyStateRules.damage(
-                item.getType().getMaxDurability(), current, max);
+    public static short checkDurability(ItemStack item, int current, int maximum) {
+        return LegacyStateRules.damage(item.getType().getMaxDurability(), current, maximum);
     }
 
-    public static void refreshDurability(ItemStack item, int current, int max) {
-        mainThread();
-        writeDamage(item, checkDurability(item, current, max));
+    public static void refreshDurability(ItemStack item, int current, int maximum) {
+        thread();
+        setComponent(item, DataComponents.DAMAGE, (int) checkDurability(item, current, maximum));
     }
 }

@@ -1,17 +1,11 @@
 package dev.itemloom.compat.ni.action;
 
 import dev.itemloom.compat.ni.NiConfig;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-/** Decodes action configuration without executing actions or selecting branches. */
 final class NiActionSyntax {
     sealed interface Form permits Empty, Text, Sequence, Branch, Nested {}
 
@@ -23,60 +17,70 @@ final class NiActionSyntax {
 
     record Sequence(List<?> values) implements Form {
         Sequence {
-            // Null entries are valid no-op steps, so List.copyOf is unsuitable here.
             values = Collections.unmodifiableList(new ArrayList<>(values));
         }
     }
 
     record Branch(Kind kind, NiConfig config) implements Form {}
 
-    /** Keep the nested compile boundary so the caller can retain its host dispatch scope. */
     record Nested(Object value) implements Form {}
 
     enum Kind {
-        CONDITION("condition"),
-        LABEL("label"),
-        REPEAT("repeat"),
-        WHILE("while"),
-        CONTAINS("contains"),
-        KEY("key"),
-        INT_TREE("int-tree"),
-        DOUBLE_TREE("double-tree"),
-        WEIGHT("weight"),
-        CONDITION_WEIGHT("condition-weight");
-
-        private final String token;
-
-        Kind(String token) {
-            this.token = token;
-        }
+        CONDITION,
+        LABEL,
+        REPEAT,
+        WHILE,
+        CONTAINS,
+        KEY,
+        INT_TREE,
+        DOUBLE_TREE,
+        WEIGHT,
+        CONDITION_WEIGHT
     }
 
-    private static final Map<String, Kind> EXPLICIT =
-            Stream.of(Kind.values())
-                    .collect(Collectors.toUnmodifiableMap(kind -> kind.token, Function.identity()));
-    private static final List<Kind> INFERRED =
-            List.of(Kind.CONDITION, Kind.REPEAT, Kind.WHILE, Kind.LABEL);
-
-    private NiActionSyntax() {}
-
     static Form classify(Object input) {
-        if (input instanceof String text) return new Text(text);
-        if (input instanceof List<?> list) return new Sequence(list);
-        NiConfig config = NiValues.config(input);
-        if (config == null) return Empty.INSTANCE;
-
-        String type = config.string("type");
-        Kind explicit = type == null ? null : EXPLICIT.get(type.toLowerCase(Locale.ROOT));
-        if (explicit != null) return new Branch(explicit, config);
-        for (Kind candidate : INFERRED) {
-            if (config.contains(candidate.token)) return new Branch(candidate, config);
+        if (input instanceof String text) {
+            return new Text(text);
         }
-
-        if (config.keys().size() != 1) return Empty.INSTANCE;
-        String key = config.keys().iterator().next();
-        Object value = config.get(key);
-        if (key.equals("actions")) return new Nested(value);
-        return value instanceof String text ? new Text(key + ": " + text) : Empty.INSTANCE;
+        if (input instanceof List<?> list) {
+            return new Sequence(list);
+        }
+        NiConfig config = NiValues.config(input);
+        if (config == null) {
+            return Empty.INSTANCE;
+        }
+        String type = config.string("type", "").toLowerCase(Locale.ROOT);
+        Kind kind =
+                switch (type) {
+                    case "condition" -> Kind.CONDITION;
+                    case "label" -> Kind.LABEL;
+                    case "repeat" -> Kind.REPEAT;
+                    case "while" -> Kind.WHILE;
+                    case "contains" -> Kind.CONTAINS;
+                    case "key" -> Kind.KEY;
+                    case "int-tree" -> Kind.INT_TREE;
+                    case "double-tree" -> Kind.DOUBLE_TREE;
+                    case "weight" -> Kind.WEIGHT;
+                    case "condition-weight" -> Kind.CONDITION_WEIGHT;
+                    default -> null;
+                };
+        if (kind != null) {
+            return new Branch(kind, config);
+        }
+        for (Kind inferred : List.of(Kind.CONDITION, Kind.REPEAT, Kind.WHILE, Kind.LABEL)) {
+            if (config.get(inferred.name().toLowerCase(Locale.ROOT)) != null) {
+                return new Branch(inferred, config);
+            }
+        }
+        if (config.values().size() == 1) {
+            var entry = config.values().entrySet().iterator().next();
+            if (entry.getKey().equals("actions")) {
+                return new Nested(entry.getValue());
+            }
+            if (entry.getValue() instanceof String value) {
+                return new Text(entry.getKey() + ": " + value);
+            }
+        }
+        return Empty.INSTANCE;
     }
 }

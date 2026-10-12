@@ -1,5 +1,7 @@
 package dev.itemloom.probe;
 
+import dev.itemloom.paper.runtime.FormatRuntimeLoader;
+
 import dev.itemloom.compat.ni.NiConfig;
 import dev.itemloom.compat.ni.NiRepository;
 import dev.itemloom.compat.ni.action.NiActionContext;
@@ -137,7 +139,11 @@ public final class RuntimeRulesProbe {
                     "food body cannot re-enable vanilla consumption of committed charge result");
         }
         try (Fixture fixture = new Fixture(plugin, "durability")) {
-            try (ItemMaintenance maintenance = new ItemMaintenance(fixture.catalog, plugin)) {
+            try (ItemMaintenance maintenance =
+                    new ItemMaintenance(
+                            FormatRuntimeLoader.maintenance(fixture.catalog),
+                            FormatRuntimeLoader.durability(fixture.catalog),
+                            plugin)) {
                 for (boolean eventBased : List.of(false, true)) {
                     ItemStack tool =
                             fixture.hold(

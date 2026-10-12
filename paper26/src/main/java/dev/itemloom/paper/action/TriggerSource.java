@@ -1,11 +1,12 @@
 package dev.itemloom.paper.action;
 
+import dev.itemloom.paper.nms.NmsItems;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import dev.itemloom.paper.nms.NmsItems;
-import org.bukkit.craftbukkit.entity.CraftHumanEntity;
+import org.bukkit.craftbukkit.entity.CraftPlayer;
 import org.bukkit.craftbukkit.inventory.CraftInventory;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.entity.Item;
@@ -14,41 +15,20 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 
-/** One physical event source; equal values in a replacement handle never inherit its ownership. */
 final class TriggerSource {
-    record PlayerSlot(UUID player, int slot) {}
-
-    private record Cursor(UUID player) {}
-
-    private record Dropped(UUID entity) {}
-
-    private record EventStack(UUID player, Identity stack) {}
-
-    private record ContainerSlot(Identity container, int slot) {}
-
-    private record Identity(Object value) {
-        @Override
-        public boolean equals(Object other) {
-            return other instanceof Identity identity && identity.value == value;
-        }
-
-        @Override
-        public int hashCode() {
-            return System.identityHashCode(value);
-        }
-    }
-
     final Player player;
     final Object key;
     final ItemStack original;
-    private ItemStack snapshot;
+    private final Object reference;
     private final Supplier<ItemStack> read;
     private final Consumer<ItemStack> write;
     private final BooleanSupplier valid;
+    private final boolean preserveHandle;
     private final Item entity;
-    private final Object handle;
+    private ItemStack snapshot;
+    private Object committed;
+    private boolean committedEmpty;
 
     private TriggerSource(
             Player player,
@@ -56,20 +36,21 @@ final class TriggerSource {
             Supplier<ItemStack> read,
             Consumer<ItemStack> write,
             BooleanSupplier valid,
+            boolean preserveHandle,
             Item entity) {
         this.player = player;
         this.key = key;
         this.read = read;
         this.write = write;
         this.valid = valid;
+        this.preserveHandle = preserveHandle;
         this.entity = entity;
         original = read.get();
-        handle = reference(original);
+        reference = identity(original);
     }
 
     static TriggerSource equipment(Player player, EquipmentSlot equipment) {
-        PlayerInventory inventory = player.getInventory();
-        int selected = inventory.getHeldItemSlot();
+        int selected = player.getInventory().getHeldItemSlot();
         int slot =
                 switch (equipment) {
                     case HAND -> selected;
@@ -80,148 +61,175 @@ final class TriggerSource {
                     case FEET -> 36;
                     default ->
                             throw new IllegalArgumentException(
-                                    "Unsupported player equipment source: " + equipment);
+                                    "Unsupported equipment slot: " + equipment);
                 };
         return new TriggerSource(
                 player,
                 new PlayerSlot(player.getUniqueId(), slot),
-                () -> inventory.getItem(slot),
-                value -> inventory.setItem(slot, value),
-                () -> equipment != EquipmentSlot.HAND || inventory.getHeldItemSlot() == selected,
+                () -> player.getInventory().getItem(slot),
+                value -> player.getInventory().setItem(slot, value),
+                () ->
+                        equipment != EquipmentSlot.HAND
+                                || player.getInventory().getHeldItemSlot() == selected,
+                true,
                 null);
     }
 
     static TriggerSource cursor(Player player, InventoryView view) {
-        BooleanSupplier visible = sameView(player, view);
+        BooleanSupplier valid = viewGuard(player, view);
         return new TriggerSource(
                 player,
-                new Cursor(player.getUniqueId()),
+                new EndpointKey(view, -1),
                 view::getCursor,
                 view::setCursor,
-                visible,
+                valid,
+                true,
                 null);
     }
 
-    static TriggerSource clicked(Player player, InventoryView view, int rawSlot) {
-        Inventory inventory = view.getInventory(rawSlot);
+    static TriggerSource clicked(Player player, InventoryView view, int raw) {
+        Inventory inventory = view.getInventory(raw);
         if (inventory == null) return null;
-        int slot = view.convertSlot(rawSlot);
+        int slot = view.convertSlot(raw);
         Object key =
-                inventory instanceof PlayerInventory
+                inventory == player.getInventory() || inventory.equals(player.getInventory())
                         ? new PlayerSlot(player.getUniqueId(), slot)
-                        : new ContainerSlot(
-                                new Identity(
-                                        inventory instanceof CraftInventory craft
-                                                ? craft.getInventory()
-                                                : inventory),
+                        : new EndpointKey(
+                                inventory instanceof CraftInventory craft
+                                        ? craft.getInventory()
+                                        : inventory,
                                 slot);
         return new TriggerSource(
                 player,
                 key,
                 () -> inventory.getItem(slot),
                 value -> inventory.setItem(slot, value),
-                sameView(player, view),
+                viewGuard(player, view),
+                true,
                 null);
     }
 
-    static TriggerSource dropped(Player player, Item entity) {
-        // A PlayerDropItemEvent can precede world insertion, so isValid() is not a liveness test.
+    static TriggerSource dropped(Player player, Item item) {
         return new TriggerSource(
                 player,
-                new Dropped(entity.getUniqueId()),
-                entity::getItemStack,
-                entity::setItemStack,
-                () -> !entity.isDead(),
-                entity);
+                item.getUniqueId(),
+                item::getItemStack,
+                item::setItemStack,
+                () -> !item.isDead(),
+                false,
+                item);
     }
 
-    /** Projectile consumables can already be detached by vanilla; their event owns that handle. */
     static TriggerSource eventStack(Player player, Supplier<ItemStack> read) {
-        ItemStack item = read.get();
+        ItemStack original = read.get();
         return new TriggerSource(
                 player,
-                new EventStack(player.getUniqueId(), new Identity(reference(item))),
+                new EndpointKey(identity(original), player.getUniqueId()),
                 read,
-                value -> NmsItems.replace(item, value),
+                value -> NmsItems.replace(original, value),
                 () -> true,
+                true,
                 null);
     }
 
-    private static BooleanSupplier sameView(Player player, InventoryView view) {
-        if (player instanceof CraftHumanEntity craft) {
-            var container = craft.getHandle().containerMenu;
-            return () ->
-                    craft.getHandle().containerMenu == container
-                            && container.getBukkitView() == view;
-        }
-        return () -> player.getOpenInventory() == view;
+    private static BooleanSupplier viewGuard(Player player, InventoryView view) {
+        Object menu = player instanceof CraftPlayer craft ? craft.getHandle().containerMenu : null;
+        return () ->
+                player.getOpenInventory() == view
+                        && (!(player instanceof CraftPlayer craft)
+                                || craft.getHandle().containerMenu == menu);
     }
 
     boolean accepts(ItemStack supplied) {
-        if (reference(supplied) != handle
-                || !same(original, supplied)
-                || !player.isOnline()
-                || !valid.getAsBoolean()) return false;
+        if (!player.isOnline() || !valid.getAsBoolean() || identity(supplied) != reference)
+            return false;
         ItemStack current = read.get();
-        if (reference(current) != handle || !same(original, current)) return false;
-        // Most equipment slots have no matching trigger. Snapshot only after finding one,
-        // immediately before entering callbacks, rather than cloning NBT on every event.
-        snapshot = empty(original) ? null : original.clone();
+        if (identity(current) != reference
+                || !Objects.equals(current, original)
+                || !Objects.equals(supplied, original)) return false;
+        snapshot = original == null ? null : original.clone();
         return true;
     }
 
     boolean unchanged() {
         if (!player.isOnline() || !valid.getAsBoolean()) return false;
         ItemStack current = read.get();
-        return reference(current) == handle && same(snapshot, current);
+        return identity(current) == reference && Objects.equals(current, snapshot);
     }
 
     ItemStack candidate() {
         return snapshot == null ? null : snapshot.clone();
     }
 
-    /** Legal component edits retain ownership; moving or replacing the physical stack does not. */
-    boolean ownsCommitted(ItemStack committed) {
+    boolean ownsCommitted(ItemStack value) {
         if (!player.isOnline() || !valid.getAsBoolean()) return false;
         ItemStack current = read.get();
-        return empty(committed) ? empty(current) : reference(current) == reference(committed);
+        return committedEmpty
+                ? empty(current)
+                : identity(current) == committed && identity(value) == committed;
     }
 
-    ItemStack commit(ItemStack candidate) {
-        // Inventory/cursor mirrors are also held by the vanilla event caller. Retain that
-        // NMS identity when possible so its later durability/use logic sees the committed value.
-        if (entity == null && original instanceof CraftItemStack)
-            NmsItems.replace(original, candidate);
-        else write.accept(candidate);
-        ItemStack actual = read.get();
-        if (!same(candidate, actual))
-            throw new IllegalStateException(
-                    "Item trigger source did not retain its prepared value");
-        return actual;
+    ItemStack commit(ItemStack prepared) {
+        return commit(prepared, false);
     }
 
-    /** Refresh entity metadata from its current owned value, never from a pre-script snapshot. */
-    void synchronizeEntity(ItemStack committed) {
-        if (entity == null || !valid.getAsBoolean()) return;
+    ItemStack commit(ItemStack prepared, boolean useSetter) {
+        if (!unchanged())
+            throw new IllegalStateException("Physical item source changed before commit");
+        if (!useSetter && preserveHandle && original instanceof CraftItemStack)
+            NmsItems.replace(original, prepared);
+        else write.accept(prepared);
         ItemStack current = read.get();
-        if (reference(current) != reference(committed)) return;
-        if (empty(current)) entity.remove();
-        else write.accept(current);
+        if (!(empty(current) && empty(prepared)) && !Objects.equals(current, prepared)) {
+            throw new IllegalStateException(
+                    "Physical item source did not retain the prepared value");
+        }
+        committed = identity(current);
+        committedEmpty = empty(current);
+        return current;
+    }
+
+    void synchronizeEntity(ItemStack value) {
+        if (entity == null || entity.isDead()) return;
+        ItemStack current = read.get();
+        if (committedEmpty && empty(current)) entity.remove();
+        else if (identity(current) == committed && identity(value) == committed)
+            entity.setItemStack(current);
     }
 
     boolean entityEmpty() {
-        return entity != null && (!valid.getAsBoolean() || empty(read.get()));
+        return entity != null && (entity.isDead() || empty(read.get()));
     }
 
-    private static Object reference(ItemStack item) {
-        return item instanceof CraftItemStack ? CraftItemStack.unwrap(item) : item;
+    private static boolean empty(ItemStack stack) {
+        return stack == null || stack.isEmpty();
     }
 
-    private static boolean empty(ItemStack item) {
-        return item == null || item.isEmpty();
+    private static Object identity(ItemStack stack) {
+        return stack instanceof CraftItemStack craft ? craft.handle : stack;
     }
 
-    private static boolean same(ItemStack a, ItemStack b) {
-        return empty(a) ? empty(b) : a.equals(b);
+    record PlayerSlot(UUID player, int slot) {}
+
+    private static final class EndpointKey {
+        final Object object;
+        final Object slot;
+
+        EndpointKey(Object object, Object slot) {
+            this.object = object;
+            this.slot = slot;
+        }
+
+        @Override
+        public int hashCode() {
+            return System.identityHashCode(object) * 31 + slot.hashCode();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof EndpointKey key
+                    && object == key.object
+                    && slot.equals(key.slot);
+        }
     }
 }

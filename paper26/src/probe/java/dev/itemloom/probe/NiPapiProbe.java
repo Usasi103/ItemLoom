@@ -171,13 +171,17 @@ final class NiPapiProbe {
                                             Object previous = service.placeholderRevision();
                                             // Obtain the actual existing manager without changing
                                             // config files.
-                                            var method =
-                                                    ItemsService.class.getDeclaredMethod(
-                                                            "activeNi");
-                                            method.setAccessible(true);
+                                            var installedField =
+                                                    ItemsService.class.getDeclaredField(
+                                                            "installed");
+                                            installedField.setAccessible(true);
+                                            var installed = installedField.get(service);
+                                            var catalogField =
+                                                    installed.getClass().getDeclaredField("ni");
+                                            catalogField.setAccessible(true);
                                             var catalog =
                                                     (dev.itemloom.paper.compat.NiCatalog)
-                                                            method.invoke(service);
+                                                            catalogField.get(installed);
                                             var manager = new LegacyItemManager(catalog.items());
                                             manager.reloadItemConfigs();
                                             check.accept(

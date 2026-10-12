@@ -32,93 +32,109 @@ public final class ItemsProbe extends JavaPlugin {
         getLogger().info("Starting probe: " + mode);
         try {
             var reference = getServer().getPluginManager().getPlugin("NeigeItems");
-            CompletionStage<Map<String, Object>> result =
-                    switch (mode) {
-                        case "source-replacement" ->
-                                CompletableFuture.completedFuture(SourceReplacementProbe.run(this));
-                        case "legacy-materials" ->
-                                CompletableFuture.completedFuture(
-                                        LegacyMaterialsProbe.run(
-                                                this, args.length > 1 ? args[1] : "bench"));
-                        case "itembridge" ->
-                                CompletableFuture.completedFuture(ItemBridgeProbe.run(this));
-                        case "external-material" ->
-                                CompletableFuture.completedFuture(ExternalMaterialProbe.run(this));
-                        case "action-threads" -> ActionThreadProbe.run(this);
-                        case "action-runtime" -> ActionRuntimeProbe.run(this);
-                        case "triggers" -> ItemTriggerProbe.run(this);
-                        case "runtime-rules" ->
-                                CompletableFuture.completedFuture(RuntimeRulesProbe.run(this));
-                        case "consume-commit" -> ConsumeCommitProbe.run(this);
-                        case "trigger-commit" -> TriggerCommitProbe.run(this);
-                        case "scheduler" -> SchedulerProbe.run(this);
-                        case "builtins" -> BuiltinActionProbe.run(this);
-                        case "inputs" -> InputCaptureProbe.run(this);
-                        case "signs" -> SignCaptureProbe.run(this);
-                        case "item-save" ->
-                                CompletableFuture.completedFuture(
-                                        ItemSaveProbe.run(this, reference));
-                        case "registry" -> ItemRegistryProbe.run(this);
-                        case "config-manager" -> ItemConfigManagerProbe.run(this);
-                        case "manager-reload" ->
-                                CompletableFuture.completedFuture(ItemManagerReloadProbe.run(this));
-                        case "manager-reload-delayed" -> ItemManagerReloadProbe.runDelayed(this);
-                        case "packs" -> ItemPackProbe.run(this, reference);
-                        case "packs-paired" ->
-                                PackOptimizationProbe.run(this, java.nio.file.Path.of(args[1]));
-                        case "drops" -> ItemDropProbe.run(this);
-                        case "drop-visibility" -> DropVisibilityProbe.run(this);
-                        case "generation-plan" ->
-                                CompletableFuture.completedFuture(GenerationPlanProbe.run());
-                        case "generation-paired" ->
-                                CompletableFuture.completedFuture(
-                                        GenerationPlanProbe.paired(java.nio.file.Path.of(args[1])));
-                        case "display" -> ItemDisplayProbe.run(this);
-                        case "display-proofs" ->
-                                CompletableFuture.completedFuture(DisplayProofProbe.run(this));
-                        case "display-template" ->
-                                CompletableFuture.completedFuture(DisplayTemplateProbe.run(this));
-                        case "return-ledger" -> ReturnLedgerProbe.run(this);
-                        case "papi-config" -> CompletableFuture.completedFuture(papiConfig());
-                        case "ni-placeholders" -> NiPlaceholderProbe.run(this, reference);
-                        case "ni-papi" -> niPapi();
-                        case "filesave" -> ItemFileSaveProbe.run(this);
-                        case "maintenance" -> ItemMaintenanceProbe.run(this);
-                        case "lifecycle" -> LifecycleProbe.run(this);
-                        case "identity" ->
-                                CompletableFuture.completedFuture(ItemIdentityProbe.run(this));
-                        case "integrations" -> OptionalIntegrationProbe.run(this);
-                        case "mythic-drops" -> MythicDropProbe.run(this);
-                        case "loot-bags" ->
-                                CompletableFuture.completedFuture(LootBagProbe.run(this));
-                        case "sx-config" ->
-                                CompletableFuture.completedFuture(SxConfigProbe.run(this));
-                        case "provider-admin" -> ProviderAdminProbe.run(this);
-                        case "use-restrictions" ->
-                                CompletableFuture.completedFuture(UseRestrictionsProbe.run(this));
-                        case "generation-events" ->
-                                CompletableFuture.completedFuture(
-                                        ItemGenerationEventProbe.run(this));
-                        case "library" ->
-                                CompletableFuture.completedFuture(
-                                        ActionLibraryProbe.run(this, reference));
-                        case "editors" ->
-                                CompletableFuture.completedFuture(
-                                        ItemEditorProbe.run(this, reference));
-                        case "revisions" ->
-                                CompletableFuture.completedFuture(ItemRevisionProbe.run(this));
-                        case "nbt" -> CompletableFuture.completedFuture(NbtProbe.run(this));
-                        case "read-optimization" ->
-                                CompletableFuture.completedFuture(ReadOptimizationProbe.run());
-                        case "item-nodes" ->
-                                CompletableFuture.completedFuture(ItemNodeProbe.run(reference));
-                        case "actions" ->
-                                CompletableFuture.completedFuture(ActionProbe.run(reference));
-                        case "nodes" -> CompletableFuture.completedFuture(NodeProbe.run(reference));
-                        case "corpus", "compare" -> null;
-                        default ->
-                                throw new IllegalArgumentException("Unknown probe mode: " + mode);
-                    };
+            CompletionStage<Map<String, Object>> result;
+            try {
+                result =
+                        switch (mode) {
+                            case "source-replacement" ->
+                                    CompletableFuture.completedFuture(
+                                            SourceReplacementProbe.run(this));
+                            case "legacy-materials" ->
+                                    CompletableFuture.completedFuture(
+                                            LegacyMaterialsProbe.run(
+                                                    this, args.length > 1 ? args[1] : "bench"));
+                            case "itembridge" ->
+                                    CompletableFuture.completedFuture(ItemBridgeProbe.run(this));
+                            case "external-material" ->
+                                    CompletableFuture.completedFuture(
+                                            ExternalMaterialProbe.run(this));
+                            case "action-threads" -> ActionThreadProbe.run(this);
+                            case "action-runtime" -> ActionRuntimeProbe.run(this);
+                            case "triggers" -> ItemTriggerProbe.run(this);
+                            case "runtime-rules" ->
+                                    CompletableFuture.completedFuture(RuntimeRulesProbe.run(this));
+                            case "consume-commit" -> ConsumeCommitProbe.run(this);
+                            case "trigger-commit" -> TriggerCommitProbe.run(this);
+                            case "scheduler" -> SchedulerProbe.run(this);
+                            case "builtins" -> BuiltinActionProbe.run(this);
+                            case "inputs" -> InputCaptureProbe.run(this);
+                            case "signs" -> SignCaptureProbe.run(this);
+                            case "item-save" ->
+                                    CompletableFuture.completedFuture(
+                                            ItemSaveProbe.run(this, reference));
+                            case "registry" -> ItemRegistryProbe.run(this);
+                            case "config-manager" -> ItemConfigManagerProbe.run(this);
+                            case "manager-reload" ->
+                                    CompletableFuture.completedFuture(
+                                            ItemManagerReloadProbe.run(this));
+                            case "manager-reload-delayed" ->
+                                    ItemManagerReloadProbe.runDelayed(this);
+                            case "packs" -> ItemPackProbe.run(this, reference);
+                            case "packs-paired" ->
+                                    PackOptimizationProbe.run(this, java.nio.file.Path.of(args[1]));
+                            case "drops" -> ItemDropProbe.run(this);
+                            case "drop-visibility" -> DropVisibilityProbe.run(this);
+                            case "generation-plan" ->
+                                    CompletableFuture.completedFuture(GenerationPlanProbe.run());
+                            case "generation-paired" ->
+                                    CompletableFuture.completedFuture(
+                                            GenerationPlanProbe.paired(
+                                                    java.nio.file.Path.of(args[1])));
+                            case "display" -> ItemDisplayProbe.run(this);
+                            case "display-proofs" ->
+                                    CompletableFuture.completedFuture(DisplayProofProbe.run(this));
+                            case "display-template" ->
+                                    CompletableFuture.completedFuture(
+                                            DisplayTemplateProbe.run(this));
+                            case "return-ledger" -> ReturnLedgerProbe.run(this);
+                            case "papi-config" -> CompletableFuture.completedFuture(papiConfig());
+                            case "ni-placeholders" -> NiPlaceholderProbe.run(this, reference);
+                            case "ni-papi" -> niPapi();
+                            case "filesave" -> ItemFileSaveProbe.run(this);
+                            case "maintenance" -> ItemMaintenanceProbe.run(this);
+                            case "lifecycle" -> LifecycleProbe.run(this);
+                            case "identity" ->
+                                    CompletableFuture.completedFuture(ItemIdentityProbe.run(this));
+                            case "integrations" -> OptionalIntegrationProbe.run(this);
+                            case "mythic-drops" -> MythicDropProbe.run(this);
+                            case "loot-bags" ->
+                                    CompletableFuture.completedFuture(LootBagProbe.run(this));
+                            case "sx-config" ->
+                                    CompletableFuture.completedFuture(SxConfigProbe.run(this));
+                            case "sx-rewrite" ->
+                                    CompletableFuture.completedFuture(SxRewriteProbe.run(this));
+                            case "provider-admin" -> ProviderAdminProbe.run(this);
+                            case "use-restrictions" ->
+                                    CompletableFuture.completedFuture(
+                                            UseRestrictionsProbe.run(this));
+                            case "generation-events" ->
+                                    CompletableFuture.completedFuture(
+                                            ItemGenerationEventProbe.run(this));
+                            case "library" ->
+                                    CompletableFuture.completedFuture(
+                                            ActionLibraryProbe.run(this, reference));
+                            case "editors" ->
+                                    CompletableFuture.completedFuture(
+                                            ItemEditorProbe.run(this, reference));
+                            case "revisions" ->
+                                    CompletableFuture.completedFuture(ItemRevisionProbe.run(this));
+                            case "nbt" -> CompletableFuture.completedFuture(NbtProbe.run(this));
+                            case "read-optimization" ->
+                                    CompletableFuture.completedFuture(ReadOptimizationProbe.run());
+                            case "item-nodes" ->
+                                    CompletableFuture.completedFuture(ItemNodeProbe.run(reference));
+                            case "actions" ->
+                                    CompletableFuture.completedFuture(ActionProbe.run(reference));
+                            case "nodes" ->
+                                    CompletableFuture.completedFuture(NodeProbe.run(reference));
+                            case "corpus", "compare" -> null;
+                            default ->
+                                    throw new IllegalArgumentException(
+                                            "Unknown probe mode: " + mode);
+                        };
+            } catch (Exception | AssertionError failure) {
+                result = CompletableFuture.failedFuture(failure);
+            }
             if (result != null) {
                 result.whenComplete(
                         (report, error) -> {

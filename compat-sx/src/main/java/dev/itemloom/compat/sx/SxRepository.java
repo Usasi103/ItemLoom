@@ -10,7 +10,7 @@ import java.util.Map;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
-/** Optional SX-Item subtree. Ordinary reads never install, migrate, or rewrite source files. */
+/** Read-only source collection and validation. */
 public final class SxRepository {
     public record Definition(String id, String source, SxConfig config, String alias) {}
 
@@ -26,56 +26,65 @@ public final class SxRepository {
             scripts = ordered(scripts);
             sources = ordered(sources);
         }
-    }
 
-    private static <T> Map<String, T> ordered(Map<String, T> source) {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(source));
+        private static <T> Map<String, T> ordered(Map<String, T> values) {
+            return Collections.unmodifiableMap(new LinkedHashMap<>(values));
+        }
     }
 
     public Input read(Path root) throws IOException {
-        Map<String, String> sources = sources(root);
+        Map<String, String> sources = texts(root);
+        SxConfig settings = new SxConfig(Map.of());
         Map<String, Definition> items = new LinkedHashMap<>();
         Map<String, SxRandom> random = new LinkedHashMap<>();
         Map<String, String> scripts = new LinkedHashMap<>();
-        SxConfig settings = new SxConfig(Map.of());
-        for (var file : sources.entrySet()) {
-            String path = file.getKey();
-            if (path.startsWith("Scripts/")) {
-                scripts.put(path.substring(8), file.getValue());
+        for (Map.Entry<String, String> source : sources.entrySet()) {
+            String name = source.getKey();
+            if (name.startsWith("Scripts/")) {
+                scripts.put(name.substring(8), source.getValue());
                 continue;
             }
-            SxConfig config = parse(file.getValue(), path);
-            if (path.equals("Config.yml")) {
+            SxConfig config = parse(source.getValue(), name);
+            if (name.equals("Config.yml")) {
                 settings = config;
-                continue;
-            }
-            if (path.startsWith("Item/")) {
-                for (var entry : config.values().entrySet()) {
+            } else if (name.startsWith("RandomString/")) {
+                for (Map.Entry<String, SxRandom> entry :
+                        SxRandom.compile(config.values()).entrySet()) {
+                    if (random.putIfAbsent(entry.getKey(), entry.getValue()) != null) {
+                        throw new IllegalArgumentException(
+                                "Duplicate random key " + entry.getKey() + " in " + name);
+                    }
+                }
+            } else {
+                for (Map.Entry<String, Object> entry : config.values().entrySet()) {
                     String id = entry.getKey();
-                    if (id.startsWith("NoLoad")) continue;
-                    if (id.isBlank())
-                        throw new IllegalArgumentException(path + ": empty SX item ID");
+                    if (id.startsWith("NoLoad")) {
+                        continue;
+                    }
+                    if (id.isBlank()) {
+                        throw new IllegalArgumentException("Blank item ID in " + name);
+                    }
                     Object value = entry.getValue();
                     Definition definition;
-                    if (value instanceof String target)
-                        definition = new Definition(id, path, null, target);
-                    else if (value instanceof Map<?, ?> map)
+                    if (value instanceof String alias) {
+                        definition = new Definition(id, name, null, alias);
+                    } else if (value instanceof Map<?, ?> map) {
                         definition =
                                 new Definition(
-                                        id, path, new SxConfig(SxConfig.stringKeys(map)), null);
-                    else
-                        throw new IllegalArgumentException(
-                                path + ": " + id + " must be an item object or alias");
+                                        id, name, new SxConfig(SxConfig.stringKeys(map)), null);
+                    } else {
+                        throw new IllegalArgumentException("Invalid item " + id + " in " + name);
+                    }
                     Definition previous = items.putIfAbsent(id, definition);
-                    if (previous != null)
+                    if (previous != null) {
                         throw new IllegalArgumentException(
-                                path + ": SX item " + id + " duplicates " + previous.source());
-                }
-            } else if (path.startsWith("RandomString/")) {
-                for (var entry : SxRandom.compile(config.values()).entrySet()) {
-                    if (random.putIfAbsent(entry.getKey(), entry.getValue()) != null)
-                        throw new IllegalArgumentException(
-                                path + ": duplicate SX random key " + entry.getKey());
+                                "Duplicate item "
+                                        + id
+                                        + " in "
+                                        + previous.source()
+                                        + " and "
+                                        + name);
+                    }
                 }
             }
         }
@@ -83,43 +92,60 @@ public final class SxRepository {
     }
 
     public void verifyUnchanged(Path root, Input input) throws IOException {
-        if (!input.sources().equals(sources(root)))
-            throw new IOException("SX files changed during preparation; retry reload");
+        if (!texts(root).equals(input.sources())) {
+            throw new IOException("SX sources changed during preparation; retry reload");
+        }
     }
 
     public static SxConfig parse(String text, String source) {
         YamlConfiguration yaml = new YamlConfiguration();
         try {
-            yaml.loadFromString(text);
+            yaml.loadFromString(withoutBom(text));
+            return SxConfig.from(yaml);
         } catch (InvalidConfigurationException | RuntimeException error) {
-            throw new IllegalArgumentException(source + ": " + error.getMessage(), error);
+            throw new IllegalArgumentException("Invalid SX YAML in " + source, error);
         }
-        return SxConfig.from(yaml);
     }
 
-    private Map<String, String> sources(Path root) throws IOException {
-        if (!Files.exists(root)) return Map.of();
-        if (!Files.isDirectory(root)) throw new IOException("SX root is not a directory: " + root);
+    private static Map<String, String> texts(Path root) throws IOException {
         Map<String, String> result = new LinkedHashMap<>();
-        try (var stream = Files.walk(root)) {
-            for (Path file : stream.filter(Files::isRegularFile).sorted().toList()) {
-                Path relative = root.relativize(file);
-                boolean disabled = false;
-                for (Path part : relative)
-                    if (part.toString().startsWith("NoLoad")) {
-                        disabled = true;
-                        break;
-                    }
-                if (disabled) continue;
-                String name = relative.toString().replace('\\', '/');
-                boolean yaml = name.endsWith(".yml") || name.endsWith(".yaml");
-                if (!(name.equals("Config.yml")
-                        || yaml && (name.startsWith("Item/") || name.startsWith("RandomString/"))
-                        || name.startsWith("Scripts/") && name.endsWith(".js"))) continue;
-                String text = Files.readString(file, StandardCharsets.UTF_8);
-                result.put(name, text.startsWith("\uFEFF") ? text.substring(1) : text);
+        if (!Files.exists(root)) {
+            return result;
+        }
+        if (!Files.isDirectory(root)) {
+            throw new IOException("SX source root is not a directory: " + root);
+        }
+        try (var paths = Files.walk(root)) {
+            for (Path path :
+                    paths.filter(Files::isRegularFile)
+                            .sorted((a, b) -> relative(root, a).compareTo(relative(root, b)))
+                            .toList()) {
+                String name = relative(root, path);
+                if (recognized(name)) {
+                    result.put(name, withoutBom(Files.readString(path, StandardCharsets.UTF_8)));
+                }
             }
         }
         return result;
+    }
+
+    private static String relative(Path root, Path path) {
+        return root.relativize(path).toString().replace('\\', '/');
+    }
+
+    private static boolean recognized(String name) {
+        for (String segment : name.split("/")) {
+            if (segment.startsWith("NoLoad")) {
+                return false;
+            }
+        }
+        return name.equals("Config.yml")
+                || name.startsWith("Scripts/") && name.endsWith(".js")
+                || (name.startsWith("Item/") || name.startsWith("RandomString/"))
+                        && (name.endsWith(".yml") || name.endsWith(".yaml"));
+    }
+
+    private static String withoutBom(String text) {
+        return text.startsWith("\uFEFF") ? text.substring(1) : text;
     }
 }

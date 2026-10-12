@@ -1,16 +1,16 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.Objects;
+import dev.itemloom.paper.action.DropOwnership;
 import dev.itemloom.paper.action.PlayerActionState;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.metadata.Metadatable;
 import org.bukkit.plugin.Plugin;
 
-/**
- * The metadata and cooldown subset of the old script PlayerUtils namespace.
- * Alias an instance of this adapter; no static plugin singleton or old-package class is required.
- */
 public final class LegacyPlayerUtils {
     public final LegacyPlayerUtils INSTANCE = this;
     private final Plugin plugin;
@@ -33,24 +33,21 @@ public final class LegacyPlayerUtils {
         state.setMetadata(player.getUniqueId(), key, value);
     }
 
-    /** One snapshot prevents async combo readers racing a main-thread append/reset. */
-    public java.util.List<?> comboSnapshot(Player player, String group) {
+    public List<?> comboSnapshot(Player player, String group) {
         Object value =
-                state.metadataIfAbsent(
-                        player.getUniqueId(), "Combo-" + group, java.util.ArrayList::new);
-        if (value == null) return java.util.List.of();
-        if (!(value instanceof java.util.List<?> history))
-            throw new IllegalStateException("Combo metadata is not a list: " + group);
-        synchronized (history) {
-            return new java.util.ArrayList<>(history);
+                state.metadataIfAbsent(player.getUniqueId(), "Combo-" + group, ArrayList::new);
+        if (value == null) return List.of();
+        if (!(value instanceof List<?> list))
+            throw new IllegalStateException("Invalid combo history: " + group);
+        synchronized (list) {
+            return new ArrayList<>(list);
         }
     }
 
-    /** The Player overload uses private session data; other targets use Bukkit metadata. */
     public Object getMetadataEZ(Metadatable target, String key, Object fallback) {
         if (!state.active()) return fallback;
-        if (target instanceof org.bukkit.entity.Item item && key.equals("NI-Owner")) {
-            String owner = dev.itemloom.paper.action.DropOwnership.owner(item);
+        if (target instanceof Item item && "NI-Owner".equals(key)) {
+            String owner = DropOwnership.owner(item);
             return owner == null ? fallback : owner;
         }
         return target.hasMetadata(key) ? target.getMetadata(key).getFirst().value() : fallback;
@@ -58,11 +55,14 @@ public final class LegacyPlayerUtils {
 
     public void setMetadataEZ(Metadatable target, String key, Object value) {
         if (!state.active()) return;
-        if (target instanceof org.bukkit.entity.Item item && key.equals("NI-Owner")) {
-            if (value != null && !(value instanceof String))
-                throw new IllegalArgumentException("NI-Owner must be a player name or null");
-            dev.itemloom.paper.action.DropOwnership.setOwner(item, (String) value, plugin);
-        } else target.setMetadata(key, new FixedMetadataValue(plugin, value));
+        if (target instanceof Item item && "NI-Owner".equals(key)) {
+            if (value != null && !(value instanceof String)) {
+                throw new IllegalArgumentException("NI-Owner must be a string or null");
+            }
+            DropOwnership.setOwner(item, (String) value, plugin);
+            return;
+        }
+        target.setMetadata(key, new FixedMetadataValue(plugin, value));
     }
 
     public long checkCooldown(Player player, String key, long cooldown) {

@@ -1,20 +1,19 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.HashMap;
-import java.util.Objects;
+import com.google.gson.*;
+import dev.itemloom.compat.ni.script.LegacySectionUtils;
+import dev.itemloom.core.ItemIdentity;
 import dev.itemloom.paper.compat.NiItemNodes;
-import dev.itemloom.paper.compat.nbt.LegacyNbt;
-import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
+import dev.itemloom.paper.compat.nbt.*;
+import java.util.*;
 import org.bukkit.inventory.ItemStack;
 
-/** Per-invocation legacy view; the underlying stack keeps ItemLoom' storage protocol. */
-public final class LegacyItemInfo
-        implements dev.itemloom.compat.ni.script.LegacySectionUtils.ItemView {
+public final class LegacyItemInfo implements LegacySectionUtils.ItemView {
     private final ItemStack item;
-    private final LegacyNbtItemStack nbtItem;
+    private final LegacyNbtItemStack nbt;
     private final LegacyNbt.Compound tag, properties;
-    private final LegacyNbt dataTag;
     private final String id;
+    private final LegacyNbt dataTag;
     private HashMap<String, String> data;
 
     public LegacyItemInfo(
@@ -25,7 +24,7 @@ public final class LegacyItemInfo
             String id,
             HashMap<String, String> data) {
         this.item = Objects.requireNonNull(item);
-        this.nbtItem = Objects.requireNonNull(nbtItem);
+        nbt = Objects.requireNonNull(nbtItem);
         this.tag = Objects.requireNonNull(tag);
         this.properties = Objects.requireNonNull(properties);
         this.id = Objects.requireNonNull(id);
@@ -34,13 +33,13 @@ public final class LegacyItemInfo
     }
 
     public static LegacyItemInfo inspect(ItemStack item) {
-        var identity = NiItemNodes.identity(item);
+        ItemIdentity identity = NiItemNodes.identity(item);
         if (identity == null) return null;
-        var wrapper = new LegacyNbtItemStack(item);
-        var tag = wrapper.getOrCreateTag();
+        LegacyNbtItemStack nbt = new LegacyNbtItemStack(item);
+        LegacyNbt.Compound tag = nbt.getOrCreateTag();
         return new LegacyItemInfo(
                 item,
-                wrapper,
+                nbt,
                 tag,
                 tag.getCompound("NeigeItems"),
                 identity.id(),
@@ -52,9 +51,10 @@ public final class LegacyItemInfo
     }
 
     public LegacyNbtItemStack getNbtItemStack() {
-        return nbtItem;
+        return nbt;
     }
 
+    @Override
     public LegacyNbt.Compound getItemTag() {
         return tag;
     }
@@ -67,33 +67,35 @@ public final class LegacyItemInfo
         return id;
     }
 
+    @Override
     public synchronized HashMap<String, String> getData() {
         if (data == null) {
-            data = new HashMap<>();
-            if (dataTag instanceof LegacyNbt.Compound compound) flatten(compound, "", data);
-            else if (dataTag != null) {
-                com.google.gson.JsonParser.parseString(dataTag.getAsString())
+            HashMap<String, String> parsed = new HashMap<>();
+            if (dataTag instanceof LegacyNbt.Compound compound) flatten(compound, "", parsed);
+            else if (dataTag != null)
+                JsonParser.parseString(dataTag.getAsString())
                         .getAsJsonObject()
                         .entrySet()
                         .forEach(
                                 entry ->
-                                        data.put(
+                                        parsed.put(
                                                 entry.getKey(),
                                                 entry.getValue().isJsonNull()
                                                         ? null
                                                         : entry.getValue().getAsString()));
-            }
+            data = parsed;
         }
         return data;
     }
 
     private static void flatten(
-            LegacyNbt.Compound tag, String prefix, HashMap<String, String> values) {
-        tag.forEach(
+            LegacyNbt.Compound compound, String prefix, Map<String, String> result) {
+        compound.forEach(
                 (key, value) -> {
+                    String path = prefix + key;
                     if (value instanceof LegacyNbt.Compound child)
-                        flatten(child, prefix + key + '.', values);
-                    else values.put(prefix + key, value.getAsString());
+                        flatten(child, path + ".", result);
+                    else result.put(path, value.getAsString());
                 });
     }
 

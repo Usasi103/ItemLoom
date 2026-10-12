@@ -1,55 +1,64 @@
 package dev.itemloom.paper.action;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 import dev.itemloom.compat.ni.NiScripts;
 import dev.itemloom.compat.ni.NiTemplate;
 import dev.itemloom.compat.ni.action.NiActionContext;
 import dev.itemloom.compat.ni.action.NiActions;
 import dev.itemloom.compat.ni.action.NiValues;
+import dev.itemloom.core.ActionFlow;
 import dev.itemloom.core.ActionFlow.Result;
-import dev.itemloom.core.ActionFlow.Step;
+import dev.itemloom.paper.compat.script.LegacyItemEditorManager;
+import dev.itemloom.paper.integration.OptionalItemIntegrations;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
+import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
-/** Bukkit effects and revision-owned scheduling for the NI language frontend. */
 public final class PaperActions implements NiActions.Host, AutoCloseable {
     private final JavaPlugin plugin;
-    private final ActionTasks tasks;
-    private final ActionInputCapture input;
-    private final NiActions compiler;
     private final PlayerActionState players;
+    private final ActionTasks tasks;
+    private final ActionInputCapture inputs;
+    private final NiActions compiler;
+    private final OptionalItemIntegrations integrations = new OptionalItemIntegrations();
     private final long comboInterval;
-    private final dev.itemloom.paper.integration.OptionalItemIntegrations integrations =
-            new dev.itemloom.paper.integration.OptionalItemIntegrations();
-    private final Set<String> unknown = ConcurrentHashMap.newKeySet();
-    private Map<String, Step<NiActionContext>> functions = Map.of();
-    private dev.itemloom.paper.compat.script.LegacyItemEditorManager editors;
+    private final Set<String> unknown = new HashSet<>();
+    private volatile Map<String, ActionFlow.Step<NiActionContext>> functions = Map.of();
+    private LegacyItemEditorManager editors;
 
     public PaperActions(
             JavaPlugin plugin, NiScripts scripts, PlayerActionState players, long comboInterval) {
-        this.plugin = plugin;
+        this.plugin = Objects.requireNonNull(plugin);
         this.players = players;
         this.comboInterval = comboInterval;
         tasks = new ActionTasks(plugin);
-        // The channel belongs to the plugin, while listeners and waits belong to this revision.
-        // Closing an old catalog must not unregister the replacement catalog's channel.
-        if (!plugin.getServer().getMessenger().isOutgoingChannelRegistered(plugin, "BungeeCord"))
-            plugin.getServer().getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
-        input = new ActionInputCapture(plugin, tasks, players);
+        inputs = new ActionInputCapture(plugin, tasks, players);
         compiler = new NiActions(this, scripts::validate);
+        if (!plugin.getServer().getMessenger().isOutgoingChannelRegistered(plugin, "BungeeCord")) {
+            plugin.getServer().getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord");
+        }
     }
 
     public NiActions compiler() {
@@ -60,305 +69,384 @@ public final class PaperActions implements NiActions.Host, AutoCloseable {
         return tasks;
     }
 
-    public dev.itemloom.paper.integration.OptionalItemIntegrations integrations() {
+    public OptionalItemIntegrations integrations() {
         return integrations;
     }
 
-    public void editors(dev.itemloom.paper.compat.script.LegacyItemEditorManager editors) {
-        this.editors = java.util.Objects.requireNonNull(editors);
+    public void editors(LegacyItemEditorManager manager) {
+        editors = Objects.requireNonNull(manager);
     }
 
     public boolean active() {
         return tasks.active();
     }
 
-    public void functions(Map<String, Object> definitions) {
-        Map<String, Step<NiActionContext>> compiled = new java.util.LinkedHashMap<>();
-        definitions.forEach(
+    public void functions(Map<String, Object> sources) {
+        Map<String, ActionFlow.Step<NiActionContext>> next = new HashMap<>();
+        sources.forEach(
                 (id, source) -> {
                     try {
-                        compiled.put(id, compiler.compile(source));
+                        next.put(id, compiler.compile(source));
                     } catch (RuntimeException error) {
                         throw new IllegalArgumentException(
-                                "Functions / " + id + ": " + error.getMessage(), error);
+                                "Functions." + id + ": " + error.getMessage(), error);
                     }
                 });
-        functions = Map.copyOf(compiled);
+        functions = Map.copyOf(next);
     }
 
-    public CompletionStage<Result> run(Step<NiActionContext> action, NiActionContext context) {
-        return tasks.run(() -> action.run(context))
-                .whenComplete(
-                        (value, error) -> {
-                            if (error != null)
-                                plugin.getLogger().log(Level.WARNING, "Item action failed", error);
-                        });
+    public CompletionStage<Result> run(
+            ActionFlow.Step<NiActionContext> action, NiActionContext context) {
+        CompletionStage<Result> result = tasks.run(() -> action.run(context));
+        result.whenComplete(
+                (value, failure) -> {
+                    if (failure != null)
+                        plugin.getLogger().log(Level.WARNING, "Item action failed", failure);
+                });
+        return result;
     }
 
     public CompletionStage<Result> function(String id, NiActionContext context) {
-        Step<NiActionContext> action = functions.get(id);
-        return action == null ? success() : run(action, context);
+        ActionFlow.Step<NiActionContext> action = functions.get(id);
+        return action == null ? done(Result.CONTINUE) : run(action, context);
     }
 
-    @Override
-    public void fork(Step<NiActionContext> action, NiActionContext context, boolean async) {
-        tasks.schedule(0, async, true, () -> run(action, context.clone()));
-    }
-
-    @Override
-    public CompletionStage<Result> dispatch(Step<NiActionContext> action, NiActionContext context) {
-        // CompletableFuture may already be complete when a continuation is registered.
-        // Decide the thread for each step instead of inheriting the completing thread.
-        if (context.isSync() == Bukkit.isPrimaryThread()) return action.run(context);
-        return tasks.schedule(0, !context.isSync(), true, () -> action.run(context));
-    }
-
-    @Override
-    public CompletionStage<Result> custom(
-            java.util.function.Supplier<CompletionStage<Result>> operation, boolean asyncSafe) {
-        return asyncSafe ? tasks.run(operation) : tasks.schedule(0, false, true, operation);
-    }
-
-    @Override
-    public CompletionStage<Result> execute(String id, String content, NiActionContext context) {
-        if (!active() || !context.active()) return CompletableFuture.completedFuture(Result.STOP);
-        if (id.equals("sync") || id.equals("async")) {
-            context.setSync(id.equals("sync"));
-            return tasks.schedule(0, !context.isSync(), true, PaperActions::success);
-        }
-        if (id.equals("delay"))
-            return tasks.schedule(integer(content, 0), false, false, PaperActions::success);
-        if (id.equals("func")) return function(content, context);
-        if (id.equals("catch-chat") || id.equals("catchchat"))
-            return input.capture(content, context);
-        if (id.equals("clear-catch-chat")) {
-            input.clear(context.getPlayer());
-            return success();
-        }
-        if (id.equals("catch-sign") || id.equals("catchsign"))
-            return input.captureSign(content, context);
-        if (id.equals("clear-catch-sign")) {
-            input.clearSign(context.getPlayer());
-            return success();
-        }
-        // Entity/world changes belong to the server thread even inside an async language branch.
-        return tasks.schedule(
+    public void fork(
+            ActionFlow.Step<NiActionContext> action, NiActionContext context, boolean async) {
+        tasks.schedule(
                 0,
-                false,
+                async,
                 true,
                 () -> {
-                    if (!context.active()) return CompletableFuture.completedFuture(Result.STOP);
-                    try {
-                        if (id.equals("take-ni-item") || id.equals("takeniitem"))
-                            return CompletableFuture.completedFuture(
-                                    ItemInventoryActions.take(
-                                            context.getPlayer(), content, plugin.getLogger()));
-                        effect(id, content, context);
-                        return success();
-                    } catch (RuntimeException error) {
-                        plugin.getLogger().log(Level.WARNING, "Action " + id + " failed", error);
-                        return CompletableFuture.completedFuture(Result.STOP);
-                    }
+                    NiActionContext copy = context.clone();
+                    return run(action, copy);
                 });
     }
 
-    @SuppressWarnings("deprecation")
-    private void effect(String raw, String content, NiActionContext context) {
-        String id = raw.replace("-", "");
-        Player player = context.getPlayer();
+    public CompletionStage<Result> dispatch(
+            ActionFlow.Step<NiActionContext> action, NiActionContext context) {
+        if (!active() || !context.active()) return done(Result.STOP);
+        if (context.isSync() == Bukkit.isPrimaryThread()) return action.run(context);
+        return tasks.schedule(
+                0,
+                !context.isSync(),
+                true,
+                () -> {
+                    if (!context.active()) return done(Result.STOP);
+                    return action.run(context);
+                });
+    }
+
+    public CompletionStage<Result> custom(
+            Supplier<CompletionStage<Result>> body, boolean asyncSafe) {
+        return asyncSafe ? tasks.run(body) : tasks.schedule(0, false, true, body);
+    }
+
+    public CompletionStage<Result> execute(String name, String content, NiActionContext context) {
+        if (!active() || !context.active()) return done(Result.STOP);
+        switch (name) {
+            case "sync", "async" -> {
+                boolean async = name.equals("async");
+                context.setSync(!async);
+                return tasks.schedule(
+                        0,
+                        async,
+                        true,
+                        () -> done(context.active() ? Result.CONTINUE : Result.STOP));
+            }
+            case "delay" -> {
+                return tasks.schedule(
+                        integer(content, 0),
+                        false,
+                        false,
+                        () -> done(context.active() ? Result.CONTINUE : Result.STOP));
+            }
+            case "func" -> {
+                return function(content, context);
+            }
+            case "catch-chat", "catchchat" -> {
+                return inputs.capture(content, context);
+            }
+            case "catch-sign", "catchsign" -> {
+                return inputs.captureSign(content, context);
+            }
+            case "clear-catch-chat", "clearcatchchat" -> {
+                inputs.clear(context.getPlayer());
+                return done(Result.CONTINUE);
+            }
+            case "clear-catch-sign", "clearcatchsign" -> {
+                inputs.clearSign(context.getPlayer());
+                return done(Result.CONTINUE);
+            }
+            default -> {
+                return tasks.schedule(
+                        0,
+                        false,
+                        true,
+                        () -> {
+                            if (!active() || !context.active()) return done(Result.STOP);
+                            try {
+                                return done(effect(name, content, context));
+                            } catch (RuntimeException failure) {
+                                plugin.getLogger()
+                                        .log(
+                                                Level.WARNING,
+                                                "Item action " + name + " failed",
+                                                failure);
+                                return done(Result.STOP);
+                            }
+                        });
+            }
+        }
+    }
+
+    private Result effect(String rawName, String text, NiActionContext context) {
+        String name = rawName.replace("-", "");
+        String message =
+                name.endsWith("nocolor") ? text : ChatColor.translateAlternateColorCodes('&', text);
         Object caster = context.getCaster();
-        boolean color = !id.endsWith("nocolor");
-        String message = color ? ChatColor.translateAlternateColorCodes('&', content) : content;
-        switch (id) {
+        Player player = context.getPlayer();
+        switch (name) {
             case "tell", "tellnocolor" -> {
                 if (caster instanceof CommandSender sender) sender.sendMessage(message);
             }
-            case "tellorprint", "tellorprintnocolor" ->
-                    (player == null ? Bukkit.getConsoleSender() : player).sendMessage(message);
+            case "tellorprint", "tellorprintnocolor" -> {
+                (player == null ? Bukkit.getConsoleSender() : player).sendMessage(message);
+            }
             case "chat", "chatwithcolor" -> {
-                if (player != null) player.chat(id.equals("chat") ? content : message);
+                if (player != null) player.chat(name.equals("chat") ? text : message);
             }
-            case "command", "player", "commandnocolor" -> {
-                if (player != null) Bukkit.dispatchCommand(player, message);
+            case "command", "player", "playercommand" -> {
+                if (player != null) Bukkit.dispatchCommand(player, text);
             }
-            case "console", "consolenocolor" ->
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), message);
+            case "console", "consolecommand" ->
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), text);
             case "broadcast", "broadcastnocolor" -> Bukkit.broadcastMessage(message);
             case "actionbar", "actionbarnocolor" -> {
                 if (player != null) player.sendActionBar(message);
             }
-            case "title", "titlenocolor", "broadcasttitle", "broadcasttitlenocolor" -> {
-                List<String> args = NiTemplate.split(message, ' ', 0);
-                Iterable<? extends Player> targets =
-                        id.startsWith("broadcast")
-                                ? Bukkit.getOnlinePlayers()
-                                : player == null ? List.of() : List.of(player);
-                for (Player target : targets)
-                    target.sendTitle(
-                            arg(args, 0, null),
-                            arg(args, 1, ""),
-                            integer(arg(args, 2, "10"), 10),
-                            integer(arg(args, 3, "70"), 70),
-                            integer(arg(args, 4, "20"), 20));
+            case "title", "titlenocolor" -> {
+                if (player != null) title(player, message);
+            }
+            case "broadcasttitle", "broadcasttitlenocolor" -> {
+                for (Player target : Bukkit.getOnlinePlayers()) title(target, message);
             }
             case "sound" -> {
-                if (player == null) return;
-                String[] args = content.split(" ", 3);
-                player.playSound(
-                        player.getLocation(),
-                        args[0],
-                        args.length > 1 ? (float) number(args[1], 1) : 1,
-                        args.length > 2 ? (float) number(args[2], 1) : 1);
+                if (player != null) {
+                    String[] args = text.split(" ", 3);
+                    if (args.length > 0)
+                        player.playSound(
+                                player.getLocation(),
+                                args[0],
+                                args.length > 1 ? (float) decimal(args[1], 1) : 1,
+                                args.length > 2 ? (float) decimal(args[2], 1) : 1);
+                }
             }
             case "teleport", "tp" -> {
-                if (!(caster instanceof org.bukkit.entity.Entity entity)) return;
-                String[] args = content.split(" ", 6);
-                if (args.length < 4) return;
-                var world = Bukkit.getWorld(args[0]);
-                Double x = NiValues.convert(args[1], Double.class),
-                        y = NiValues.convert(args[2], Double.class),
-                        z = NiValues.convert(args[3], Double.class);
-                if (world == null || x == null || y == null || z == null) return;
-                var location = entity.getLocation();
-                Float yaw = args.length > 4 ? decimalFloat(args[4]) : null;
-                Float pitch = args.length > 5 ? decimalFloat(args[5]) : null;
-                location.setWorld(world);
-                location.setX(x);
-                location.setY(y);
-                location.setZ(z);
-                if (yaw != null) location.setYaw(yaw);
-                if (pitch != null) location.setPitch(pitch);
-                entity.teleport(location);
+                if (caster instanceof Entity entity) teleport(entity, text);
             }
             case "server" -> {
-                if (player == null) return;
-                var output = com.google.common.io.ByteStreams.newDataOutput();
-                output.writeUTF("Connect");
-                output.writeUTF(content);
-                player.sendPluginMessage(plugin, "BungeeCord", output.toByteArray());
+                if (player != null) connect(player, text);
             }
             case "givemoney", "takemoney" -> {
-                if (player == null) return;
                 var vault = integrations.vault();
-                if (vault == null) return;
-                double amount = number(content, 0);
-                if (id.equals("givemoney")) vault.giveMoney(player, amount);
-                else vault.takeMoney(player, amount);
+                if (player != null && vault != null) {
+                    if (name.equals("givemoney")) vault.giveMoney(player, decimal(text, 0));
+                    else vault.takeMoney(player, decimal(text, 0));
+                }
             }
             case "castskill" -> {
-                if (player == null) return;
                 var mythic = integrations.mythic();
-                if (mythic != null) mythic.castSkill(player, content, player);
+                if (player != null && mythic != null) mythic.castSkill(player, text, player);
             }
-            case "giveexp", "takeexp", "setexp" -> {
-                if (player == null) return;
-                int value = integer(content, 0);
-                player.giveExp(
-                        id.equals("takeexp")
-                                ? -value
-                                : id.equals("setexp")
-                                        ? value - player.getTotalExperience()
-                                        : value);
-            }
-            case "givelevel", "takelevel", "setlevel" -> {
-                if (player == null) return;
-                int value = integer(content, 0);
-                if (id.equals("setlevel")) player.setLevel(value);
-                else player.giveExpLevels(id.equals("takelevel") ? -value : value);
-            }
-            case "givefood", "takefood", "setfood" -> {
-                if (player != null)
-                    player.setFoodLevel(
-                            (int)
-                                    adjust(
-                                            id,
-                                            player.getFoodLevel(),
-                                            Math.clamp(integer(content, 0), 0, 20)));
-            }
-            case "givesaturation", "takesaturation", "setsaturation" -> {
-                if (player != null)
-                    player.setSaturation(
-                            (float)
-                                    Math.clamp(
-                                            adjust(id, player.getSaturation(), number(content, 0)),
-                                            0,
-                                            player.getFoodLevel()));
+            case "giveexp",
+                    "takeexp",
+                    "setexp",
+                    "givelevel",
+                    "takelevel",
+                    "setlevel",
+                    "givefood",
+                    "takefood",
+                    "setfood",
+                    "givesaturation",
+                    "takesaturation",
+                    "setsaturation" -> {
+                if (player != null) playerValue(player, name, text);
             }
             case "givehealth", "takehealth", "sethealth" -> {
-                if (caster instanceof LivingEntity entity
-                        && entity.getAttribute(Attribute.MAX_HEALTH) != null)
-                    entity.setHealth(
-                            Math.clamp(
-                                    adjust(id, entity.getHealth(), number(content, 0)),
-                                    0,
-                                    entity.getAttribute(Attribute.MAX_HEALTH).getValue()));
+                if (caster instanceof LivingEntity entity) {
+                    var attribute = entity.getAttribute(Attribute.MAX_HEALTH);
+                    if (attribute != null)
+                        entity.setHealth(
+                                clamp(
+                                        adjust(name, entity.getHealth(), decimal(text, 0)),
+                                        0,
+                                        attribute.getValue()));
+                }
             }
-            case "setpotion", "setpotioneffect" -> {
-                if (!(caster instanceof LivingEntity entity)) return;
-                String[] args = content.split(" ", 3);
-                if (args.length < 3) return;
-                PotionEffectType type =
-                        PotionEffectType.getByName(args[0].toUpperCase(java.util.Locale.ROOT));
-                Integer amplifier = NiValues.strictInteger(args[1]),
-                        duration = NiValues.strictInteger(args[2]);
-                if (type != null && amplifier != null && duration != null)
-                    entity.addPotionEffect(
-                            new PotionEffect(type, duration * 20, amplifier - 1), true);
-            }
-            case "removepotion", "removepotioneffect" -> {
-                if (!(caster instanceof LivingEntity entity)) return;
-                PotionEffectType type =
-                        PotionEffectType.getByName(content.toUpperCase(java.util.Locale.ROOT));
-                if (type != null) entity.removePotionEffect(type);
+            case "setpotion", "setpotioneffect", "removepotion", "removepotioneffect" -> {
+                if (caster instanceof LivingEntity entity) potion(entity, name, text);
             }
             case "combo" -> {
-                if (player == null) return;
-                String[] info = content.split(" ", 2);
-                String key = "Combo-" + info[0];
-                @SuppressWarnings("unchecked")
-                List<ComboInfo> history =
-                        (List<ComboInfo>)
-                                players.metadataIfAbsent(
-                                        player.getUniqueId(),
-                                        key,
-                                        java.util.ArrayList<ComboInfo>::new);
-                if (history == null) return;
-                long now = System.currentTimeMillis();
-                synchronized (history) {
-                    if (!history.isEmpty() && history.getLast().time() + comboInterval < now)
-                        history.clear();
-                    history.add(new ComboInfo(info.length > 1 ? info[1] : "", now));
-                }
+                if (player != null) combo(player, text);
             }
             case "comboclear" -> {
                 if (player != null)
                     players.setMetadata(
-                            player.getUniqueId(),
-                            "Combo-" + content,
-                            new java.util.ArrayList<ComboInfo>());
+                            player.getUniqueId(), "Combo-" + text, new ArrayList<ComboInfo>());
             }
             case "setcooldown" -> {
-                if (player == null) return;
-                String[] info = content.split(" ", 2);
-                Long duration = info.length > 1 ? NiValues.convert(info[1], Long.class) : null;
-                if (duration != null) players.setCooldown(player.getUniqueId(), info[0], duration);
+                if (player != null) {
+                    String[] args = text.split(" ", 2);
+                    if (args.length == 2) {
+                        Long duration = NiValues.convert(args[1], Long.class);
+                        if (duration != null)
+                            players.setCooldown(player.getUniqueId(), args[0], duration);
+                    }
+                }
+            }
+            case "takeniitem" -> {
+                return ItemInventoryActions.take(player, text, plugin.getLogger());
             }
             default -> {
-                if (editors != null
-                        && editors.getItemEditors()
-                                .containsKey(raw.toLowerCase(java.util.Locale.getDefault()))) {
+                String editor = rawName.toLowerCase(Locale.getDefault());
+                if (editors != null && editors.getItemEditors().containsKey(editor)) {
                     if (player != null && context.getItemStack() != null)
-                        editors.runEditorWithResult(raw, content, context.getItemStack(), player);
-                } else if (unknown.add(raw))
-                    plugin.getLogger().warning("Action/editor is not implemented yet: " + raw);
+                        editors.runEditor(editor, text, context.getItemStack(), player);
+                } else if (unknown.add(rawName))
+                    plugin.getLogger().warning("Unknown item action: " + rawName);
             }
+        }
+        return Result.CONTINUE;
+    }
+
+    private static void title(Player player, String text) {
+        List<String> args = NiTemplate.split(text, ' ', 0);
+        player.sendTitle(
+                args.isEmpty() ? null : args.getFirst(),
+                args.size() < 2 ? "" : args.get(1),
+                args.size() < 3 ? 10 : integer(args.get(2), 10),
+                args.size() < 4 ? 70 : integer(args.get(3), 70),
+                args.size() < 5 ? 20 : integer(args.get(4), 20));
+    }
+
+    private static void teleport(Entity entity, String text) {
+        String[] args = text.split(" ", 6);
+        if (args.length < 4) return;
+        var world = Bukkit.getWorld(args[0]);
+        if (world == null) return;
+        Double x = NiValues.convert(args[1], Double.class);
+        Double y = NiValues.convert(args[2], Double.class);
+        Double z = NiValues.convert(args[3], Double.class);
+        if (x == null || y == null || z == null) return;
+        Location old = entity.getLocation();
+        entity.teleport(
+                new Location(
+                        world,
+                        x,
+                        y,
+                        z,
+                        args.length > 4 ? angle(args[4], old.getYaw()) : old.getYaw(),
+                        args.length > 5 ? angle(args[5], old.getPitch()) : old.getPitch()));
+    }
+
+    private void connect(Player player, String server) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (DataOutputStream data = new DataOutputStream(bytes)) {
+                data.writeUTF("Connect");
+                data.writeUTF(server);
+            }
+            player.sendPluginMessage(plugin, "BungeeCord", bytes.toByteArray());
+        } catch (IOException failure) {
+            throw new IllegalStateException(failure);
         }
     }
 
-    private static double adjust(String action, double previous, double value) {
-        return action.startsWith("give")
-                ? previous + value
-                : action.startsWith("take") ? previous - value : value;
+    private static void playerValue(Player player, String name, String text) {
+        int amount = integer(text, 0);
+        switch (name) {
+            case "giveexp" -> player.giveExp(amount);
+            case "takeexp" -> player.giveExp(-amount);
+            case "setexp" -> player.giveExp(amount - player.getTotalExperience());
+            case "givelevel" -> player.giveExpLevels(amount);
+            case "takelevel" -> player.giveExpLevels(-amount);
+            case "setlevel" -> player.setLevel(amount);
+            case "givefood", "takefood", "setfood" ->
+                    player.setFoodLevel(
+                            (int) adjust(name, player.getFoodLevel(), clamp(amount, 0, 20)));
+            default ->
+                    player.setSaturation(
+                            (float)
+                                    clamp(
+                                            adjust(name, player.getSaturation(), decimal(text, 0)),
+                                            0,
+                                            player.getFoodLevel()));
+        }
+    }
+
+    private static void potion(LivingEntity entity, String name, String text) {
+        String[] args = text.split(" ", 3);
+        PotionEffectType type = PotionEffectType.getByName(args[0].toUpperCase(Locale.ROOT));
+        if (type == null) return;
+        if (name.startsWith("remove")) entity.removePotionEffect(type);
+        else if (args.length >= 3)
+            entity.addPotionEffect(
+                    new PotionEffect(type, integer(args[2], 0) * 20, integer(args[1], 0) - 1),
+                    true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void combo(Player player, String text) {
+        String[] args = text.split(" ", 2);
+        List<ComboInfo> history =
+                (List<ComboInfo>)
+                        players.metadataIfAbsent(
+                                player.getUniqueId(), "Combo-" + args[0], ArrayList::new);
+        if (history == null) return;
+        synchronized (history) {
+            long now = System.currentTimeMillis();
+            if (!history.isEmpty() && history.getLast().time() + comboInterval < now)
+                history.clear();
+            history.add(new ComboInfo(args.length > 1 ? args[1] : "", now));
+        }
+    }
+
+    private static double adjust(String name, double old, double amount) {
+        return name.startsWith("give")
+                ? old + amount
+                : name.startsWith("take") ? old - amount : amount;
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static int integer(String text, int fallback) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException failure) {
+            return fallback;
+        }
+    }
+
+    private static double decimal(String text, double fallback) {
+        Double value = NiValues.convert(text, Double.class);
+        return value == null ? fallback : value;
+    }
+
+    private static float angle(String text, float fallback) {
+        return NiValues.convert(text, Double.class) == null ? fallback : Float.valueOf(text);
+    }
+
+    private static CompletionStage<Result> done(Result value) {
+        return CompletableFuture.completedFuture(value);
+    }
+
+    @Override
+    public void close() {
+        tasks.close();
+        inputs.close();
     }
 
     public record ComboInfo(String type, long time) {
@@ -369,33 +457,5 @@ public final class PaperActions implements NiActions.Host, AutoCloseable {
         public long getTime() {
             return time;
         }
-    }
-
-    private static int integer(String value, int fallback) {
-        Integer parsed = NiValues.strictInteger(value);
-        return parsed == null ? fallback : parsed;
-    }
-
-    private static double number(String value, double fallback) {
-        Double parsed = NiValues.convert(value, Double.class);
-        return parsed == null ? fallback : parsed;
-    }
-
-    private static Float decimalFloat(String value) {
-        return NiValues.convert(value, Double.class) == null ? null : Float.valueOf(value);
-    }
-
-    private static String arg(List<String> values, int index, String fallback) {
-        return index < values.size() ? values.get(index) : fallback;
-    }
-
-    private static CompletionStage<Result> success() {
-        return CompletableFuture.completedFuture(Result.CONTINUE);
-    }
-
-    @Override
-    public void close() {
-        tasks.close();
-        input.close();
     }
 }

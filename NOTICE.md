@@ -50,6 +50,22 @@ retention decisions for those regions. Required configuration names, script
 aliases and ordinary platform rules remain. The targeted replacements do not
 erase prior distribution or certify historical independent authorship.
 
+Version 2.6.0 replaces all substantive ItemLoom-owned runtime implementations
+against the released 2.5.0 behavior. Core generation, NI/SX configuration and
+scripts, item operations, NBT views, gameplay actions, display, commands and
+optional integrations are covered. Eight minimal public API declarations/events
+remain individually reviewed contracts; third-party code remains explicitly
+attributed below. Configuration files require no conversion, and existing
+ItemLoom item data and public API contracts remain supported.
+
+Workers used extracted contracts, approved adjacent APIs and project regression
+fixtures. The coordinator had source exposure, supplied behavior clarifications
+and made integration fixes. The source inventory records replacement/retention
+decisions and input hashes, not a legal originality determination. No particular
+third-party implementation is inherently required: these retained dependencies
+serve the concrete callers recorded in the inventory and have reviewed sources
+and licenses. GPL-3.0, attribution and historical releases remain unchanged.
+
 ## Included source and runtime libraries
 
 - **ItemBridge 1.0.32**, copyright 2025 **jhqwqmc**: [ItemBridge](https://github.com/jhqwqmc/ItemBridge),

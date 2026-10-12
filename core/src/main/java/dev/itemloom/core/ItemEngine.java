@@ -7,56 +7,62 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** A platform-independent catalog. A generation observes exactly one installed revision. */
 public final class ItemEngine<T> {
     public record Catalog<T>(long revision, Map<String, ItemRecipe<T>> recipes) {
         public Catalog {
-            LinkedHashMap<String, ItemRecipe<T>> copy = new LinkedHashMap<>();
-            recipes.forEach(
-                    (id, recipe) -> {
-                        if (id == null || id.isBlank())
-                            throw new IllegalArgumentException("Blank item id");
-                        copy.put(id, Objects.requireNonNull(recipe, id));
-                    });
+            Map<String, ItemRecipe<T>> copy = new LinkedHashMap<>();
+            Objects.requireNonNull(recipes, "recipes")
+                    .forEach(
+                            (id, recipe) -> {
+                                if (id == null || id.isBlank()) {
+                                    throw new IllegalArgumentException("Item id cannot be blank");
+                                }
+                                copy.put(id, Objects.requireNonNull(recipe, "recipe"));
+                            });
             recipes = Collections.unmodifiableMap(copy);
         }
     }
 
     public record Generated<T>(String id, long revision, T item, Map<String, String> savedRolls) {
         public Generated {
-            Objects.requireNonNull(item, "Recipe returned no item");
-            savedRolls = Collections.unmodifiableMap(new LinkedHashMap<>(savedRolls));
+            Objects.requireNonNull(item, "item");
+            savedRolls =
+                    Collections.unmodifiableMap(
+                            new LinkedHashMap<>(Objects.requireNonNull(savedRolls, "savedRolls")));
         }
     }
 
-    private final AtomicReference<Catalog<T>> active =
+    private final AtomicReference<Catalog<T>> installed =
             new AtomicReference<>(new Catalog<>(0, Map.of()));
 
     public Catalog<T> catalog() {
-        return active.get();
+        return installed.get();
     }
 
-    /** Install only fully prepared candidates; failed configuration reads never reach this method. */
     public void install(Catalog<T> candidate) {
-        Objects.requireNonNull(candidate);
+        Objects.requireNonNull(candidate, "candidate");
         while (true) {
-            Catalog<T> previous = active.get();
+            Catalog<T> previous = installed.get();
             if (candidate.revision() <= previous.revision()) {
                 throw new IllegalArgumentException("Catalog revision must advance");
             }
-            if (active.compareAndSet(previous, candidate)) return;
+            if (installed.compareAndSet(previous, candidate)) {
+                return;
+            }
         }
     }
 
     public Set<String> ids() {
-        return active.get().recipes().keySet();
+        return catalog().recipes().keySet();
     }
 
     public Generated<T> generate(String id, GenerationContext context) {
-        Catalog<T> snapshot = active.get();
-        ItemRecipe<T> recipe = snapshot.recipes().get(id);
-        if (recipe == null) throw new IllegalArgumentException("Unknown item: " + id);
-        T result = recipe.create(Objects.requireNonNull(context));
-        return new Generated<>(id, snapshot.revision(), result, context.savedRolls());
+        Catalog<T> captured = catalog();
+        ItemRecipe<T> recipe = captured.recipes().get(id);
+        if (recipe == null) {
+            throw new IllegalArgumentException("Unknown item: " + id);
+        }
+        T item = recipe.create(Objects.requireNonNull(context, "context"));
+        return new Generated<>(id, captured.revision(), item, context.savedRolls());
     }
 }

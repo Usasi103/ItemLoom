@@ -6,7 +6,7 @@ ItemLoom is an open-source custom item plugin for **Paper 26.2 and Java 25**. De
 
 Its item generation, storage, and Java API run independently. Neither NI nor SX-Item is required. ItemLoom is licensed under GPL-3.0 and retains upstream attribution in [NOTICE](NOTICE.md).
 
-Identified early adapter implementations are being replaced from behavior contracts, with comparisons against the previous release to check configuration behavior. The current replacement scope, file-level decisions and hashes are recorded in the [source review inventory](provenance/README.md). The project preserves its development history and does not claim legal clean-room certification.
+Version 2.6.0 rewrites ItemLoom's own runtime implementations against the behavior of 2.5.0, preserving direct configuration loading, public APIs and existing item data. File-level replacement and retention decisions are recorded in the [source review inventory](provenance/README.md), with validation status in the implementation document. Development history and required attribution remain.
 
 The embedded [ItemBridge](https://github.com/jhqwqmc/ItemBridge) library can use complete items from providers such as CraftEngine as prototypes. ItemLoom applies explicit configuration overrides and preserves other components, PDC, and custom tags. Install the chosen provider separately. Use `material: itembridge:craftengine:example:blade` in NI definitions or `ID: itembridge:craftengine:example:blade` in SX definitions.
 
@@ -52,7 +52,7 @@ The main command is `/itemloom`, with `/il` as an alias. No resource pack is req
 
 Reading configurations and generating items does not rewrite source files. Explicit save commands and script save APIs can write files. NI and SX configurations may coexist, but their item IDs must be unique.
 
-Compatibility is limited to the implemented configuration and script contracts. Legacy NI/SX commands, arbitrary binary Java API compatibility, and third-party SX generators are not provided. Full legacy script coverage, real-client behavior, and every third-party combination remain under validation. Existing inventory migration and external API upgrades require separate handling.
+Compatibility is limited to the implemented configuration and script contracts. Legacy NI/SX commands, arbitrary binary Java API compatibility, and third-party SX generators are not provided. Full legacy script coverage, real-client behavior, and every third-party combination remain under validation. Existing ItemLoom 2.5.0 items remain usable. Migration from other products and external API upgrades require separate handling.
 
 ## Integrations and development
 

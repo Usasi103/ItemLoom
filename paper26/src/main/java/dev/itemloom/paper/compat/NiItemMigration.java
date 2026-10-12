@@ -1,109 +1,86 @@
 package dev.itemloom.paper.compat;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Optional;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.StringTag;
-import net.minecraft.nbt.Tag;
+import com.google.gson.*;
 import dev.itemloom.core.ItemIdentity;
-import dev.itemloom.paper.nms.ItemStateCodec;
-import dev.itemloom.paper.nms.NmsItems;
+import dev.itemloom.paper.nms.*;
+import java.util.*;
+import net.minecraft.nbt.*;
 import org.bukkit.inventory.ItemStack;
 
-/** Removable old-data reader. Migration never asks an item generator to rebuild the stack. */
 public final class NiItemMigration {
-    private static final String OLD_KEY = "NeigeItems";
     private final ItemStateCodec codec = new ItemStateCodec();
 
     public Optional<ItemIdentity> identify(ItemStack item) {
-        if (item == null) return Optional.empty();
-        var data =
-                org.bukkit.craftbukkit.inventory.CraftItemStack.unwrap(item)
-                        .get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
-        return data == null ? Optional.empty() : read(data.getUnsafe());
+        return read(NmsItems.customData(item));
     }
 
     public Optional<ItemIdentity> read(CompoundTag custom) {
-        Tag raw = custom.get(OLD_KEY);
+        Tag raw = custom.get("NeigeItems");
         if (raw == null) return Optional.empty();
-        if (!(raw instanceof CompoundTag old))
-            throw new IllegalArgumentException("Malformed legacy item metadata");
-        String id = old.getString("id").orElse(null);
+        if (!(raw instanceof CompoundTag legacy))
+            throw new IllegalArgumentException("Malformed NeigeItems envelope");
+        String id = legacy.getString("id").orElse(null);
         if (id == null) return Optional.empty();
-        Map<String, String> values = new LinkedHashMap<>();
-        Tag data = old.get("data");
-        if (data instanceof CompoundTag compound) flatten(compound, "", values);
-        else if (data instanceof StringTag string) {
-            JsonElement json = JsonParser.parseString(string.value());
-            if (!json.isJsonObject())
-                throw new IllegalArgumentException("Legacy item data is not an object");
-            json.getAsJsonObject()
+        Map<String, String> rolls = new LinkedHashMap<>();
+        Tag data = legacy.get("data");
+        if (data instanceof CompoundTag compound) flatten(compound, "", rolls);
+        else if (data instanceof StringTag text) {
+            JsonElement parsed = JsonParser.parseString(text.asString().orElseThrow());
+            if (!parsed.isJsonObject())
+                throw new IllegalArgumentException("NI data must be a JSON object");
+            parsed.getAsJsonObject()
                     .entrySet()
                     .forEach(
                             entry -> {
                                 JsonElement value = entry.getValue();
-                                if (value.isJsonNull()) values.put(entry.getKey(), null);
-                                else if (value.isJsonPrimitive())
-                                    values.put(entry.getKey(), value.getAsString());
-                                else
+                                if (!value.isJsonNull() && !value.isJsonPrimitive())
                                     throw new IllegalArgumentException(
-                                            "Legacy roll is not scalar: " + entry.getKey());
+                                            "Non-scalar NI roll: " + entry.getKey());
+                                rolls.put(
+                                        entry.getKey(),
+                                        value.isJsonNull() ? null : value.getAsString());
                             });
-        } else if (data != null)
-            throw new IllegalArgumentException("Unsupported legacy item data type");
-        return Optional.of(new ItemIdentity(id, values));
+        } else if (data != null) throw new IllegalArgumentException("Malformed NI data");
+        return Optional.of(new ItemIdentity(id, rolls));
     }
 
-    private static void flatten(CompoundTag compound, String path, Map<String, String> values) {
-        for (var entry : compound.entrySet()) {
-            String key = path + entry.getKey();
+    private static void flatten(CompoundTag source, String prefix, Map<String, String> result) {
+        for (var entry : source.entrySet()) {
+            String path = prefix + entry.getKey();
             Tag value = entry.getValue();
-            if (value instanceof CompoundTag child) flatten(child, key + ".", values);
+            if (value instanceof CompoundTag nested) flatten(nested, path + ".", result);
             else
-                values.put(
-                        key,
-                        value.asString()
-                                .orElseGet(
-                                        () ->
-                                                value.asNumber()
-                                                        .map(Object::toString)
-                                                        .orElseGet(value::toString)));
+                result.put(
+                        path,
+                        value instanceof NumericTag numeric
+                                ? numeric.box().toString()
+                                : value.asString().orElseGet(value::toString));
         }
     }
 
-    public CompoundTag convert(CompoundTag custom) {
-        Optional<ItemIdentity> existing = codec.read(custom);
-        Optional<ItemIdentity> old = read(custom);
-        if (old.isEmpty()) return custom.copy();
-        if (existing.isPresent()) {
-            // Never discard an old record when two independently written identities coexist.
-            if (!existing.get().equals(old.get()))
-                throw new IllegalArgumentException("Conflicting modern and legacy item identity");
-            return custom.copy();
+    public CompoundTag convert(CompoundTag source) {
+        Optional<ItemIdentity> modern = codec.read(source);
+        Optional<ItemIdentity> legacy = read(source);
+        CompoundTag result = source.copy();
+        if (legacy.isEmpty()) return result;
+        if (modern.isPresent()) {
+            if (!modern.get().equals(legacy.get()))
+                throw new IllegalArgumentException("Conflicting native and NI item identities");
+            return result;
         }
-        CompoundTag previous = custom.getCompoundOrEmpty(OLD_KEY);
-        CompoundTag properties = previous.copy();
+        CompoundTag properties = source.getCompoundOrEmpty("NeigeItems").copy();
+        Tag data = properties.remove("data");
         properties.remove("id");
-        properties.remove("data");
-        CompoundTag result = custom.copy();
-        CompoundTag state = codec.encode(old.get(), properties);
-        // Rare older saves use a compound for data. Keep its exact key shape for scripts
-        // reading NeigeItems.data.*; the independent identity still uses flat saved rolls.
-        if (previous.get("data") instanceof CompoundTag compound)
-            state.put("compat_ni_rolls", compound.copy());
+        result.remove("NeigeItems");
+        CompoundTag state = codec.encode(legacy.get(), properties);
+        if (data instanceof CompoundTag) state.put("compat_ni_rolls", data.copy());
         result.put(ItemStateCodec.KEY, state);
-        result.remove(OLD_KEY);
         return result;
     }
 
     public ItemStack convert(ItemStack item) {
         CompoundTag original = NmsItems.customData(item);
         CompoundTag converted = convert(original);
-        // An unchanged item must retain absent custom_data as absent: adding an empty
-        // component changes the stack's serialized form and stacking identity.
         return converted.equals(original) ? item.clone() : NmsItems.withCustomData(item, converted);
     }
 }

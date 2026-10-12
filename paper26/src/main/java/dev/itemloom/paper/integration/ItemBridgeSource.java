@@ -2,37 +2,42 @@ package dev.itemloom.paper.integration;
 
 import cn.gtemc.itembridge.api.context.BuildContext;
 import cn.gtemc.itembridge.core.BukkitItemBridge;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Function;
-import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 
-/** Keeps only provider registrations; every request builds and clones its own item. */
+/** Retains provider registrations; each request obtains a fresh provider-owned value. */
 final class ItemBridgeSource {
     private record Registry(
-            BukkitItemBridge bridge, Map<String, Plugin> owners, Map<String, Throwable> failures) {}
+            BukkitItemBridge bridge, Map<String, Plugin> owners, Map<String, Throwable> failures) {
+        Registry {
+            owners = Map.copyOf(owners);
+            failures = Map.copyOf(failures);
+        }
+    }
 
-    private final Function<String, Plugin> plugins;
-    private final Supplier<Registry> discover;
+    private static final class SourceFailure extends IllegalArgumentException {
+        SourceFailure(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     private Registry registry;
+    private final boolean injected;
 
     ItemBridgeSource() {
-        plugins = ItemBridgeSource::plugin;
-        discover = ItemBridgeSource::discover;
+        injected = false;
     }
 
     ItemBridgeSource(BukkitItemBridge bridge, Map<String, Plugin> owners) {
-        Map<String, Plugin> snapshot = Map.copyOf(owners);
-        registry = new Registry(Objects.requireNonNull(bridge), snapshot, Map.of());
-        Registry fixed = registry;
-        plugins = snapshot::get;
-        discover = () -> fixed;
+        var normalized = new LinkedHashMap<String, Plugin>();
+        owners.forEach((name, owner) -> normalized.put(name.toLowerCase(Locale.ROOT), owner));
+        registry = new Registry(bridge, normalized, Map.of());
+        injected = true;
     }
 
     ItemStack item(
@@ -42,76 +47,72 @@ final class ItemBridgeSource {
             BuildContext context,
             boolean checkExists,
             boolean required) {
+        provider = provider.toLowerCase(Locale.ROOT);
         ExternalItemMaterial.requireAllowed(provider);
-        Registry current = registry;
-        Plugin plugin = current == null ? null : current.owners().get(provider);
-        // Registration can be cached; item results cannot. Avoid copying/scanning Bukkit's
-        // plugin array on every generation while still checking the owner's live state.
-        if (plugin == null || !plugin.isEnabled()) plugin = plugins.apply(provider);
-        if (plugin == null || !plugin.isEnabled()) {
-            if (!required) return null;
-            throw failure(provider, id, "plugin is missing or disabled", null);
-        }
         try {
-            if (current == null || current.owners().get(provider) != plugin) {
-                current = discover.get();
-                registry = current;
+            if (!injected) {
+                Plugin active = plugin(provider);
+                if (registry == null || registry.owners.get(provider) != active)
+                    registry = discover();
             }
-            if (!current.bridge().hasProvider(provider))
-                throw failure(
-                        provider,
-                        id,
-                        "the installed plugin has no available ItemBridge provider",
-                        current.failures().get(provider));
-            if (checkExists && !current.bridge().has(provider, id)) return null;
-            ItemStack item = current.bridge().buildOrNull(provider, id, player, context);
-            if (item == null || item.isEmpty()) {
-                if (!required) return null;
-                throw failure(provider, id, "provider returned no item or AIR", null);
+            Registry current = registry;
+            Plugin owner = current.owners.get(provider);
+            if (owner == null || !owner.isEnabled()) {
+                if (required) throw failure(provider, id, "plugin is missing or disabled", null);
+                return null;
             }
-            return item.clone();
+            Throwable discovery = current.failures.get(provider);
+            if (discovery != null) throw failure(provider, id, "来源初始化失败", discovery);
+            if (!current.bridge.hasProvider(provider)) throw failure(provider, id, "来源未注册", null);
+            if (checkExists && !current.bridge.has(provider, id)) {
+                if (required) throw failure(provider, id, "物品不存在", null);
+                return null;
+            }
+            ItemStack value = current.bridge.buildOrNull(provider, id, player, context);
+            if (value == null || value.isEmpty()) {
+                if (required) throw failure(provider, id, "返回空物品", null);
+                return null;
+            }
+            return value.clone();
         } catch (SourceFailure failure) {
             throw failure;
         } catch (RuntimeException | LinkageError failure) {
-            throw failure(provider, id, "provider call failed: " + failure, failure);
+            throw failure(provider, id, "物品生成失败", failure);
         }
     }
 
     private static Registry discover() {
-        Map<String, Plugin> owners = new HashMap<>();
-        Map<String, Throwable> failures = new HashMap<>();
-        BukkitItemBridge bridge =
+        var owners = new LinkedHashMap<String, Plugin>();
+        var failures = new LinkedHashMap<String, Throwable>();
+        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
+            if (plugin.isEnabled() && ExternalItemMaterial.allowed(plugin.getName())) {
+                owners.put(plugin.getName().toLowerCase(Locale.ROOT), plugin);
+            }
+        }
+        var bridge =
                 BukkitItemBridge.builder()
-                        .detectSupportedPlugins(
-                                name -> {
-                                    String id = name.toLowerCase(Locale.ROOT);
-                                    Plugin plugin = plugin(id);
-                                    if (plugin != null) owners.put(id, plugin);
-                                },
-                                (name, error) -> failures.put(name.toLowerCase(Locale.ROOT), error),
-                                plugin ->
-                                        plugin.isEnabled()
-                                                && ExternalItemMaterial.allowed(plugin.getName()))
                         .immutable(true)
+                        .detectSupportedPlugins(
+                                ignored -> {},
+                                (name, cause) -> failures.put(name.toLowerCase(Locale.ROOT), cause),
+                                candidate ->
+                                        candidate.isEnabled()
+                                                && ExternalItemMaterial.allowed(
+                                                        candidate.getName()))
                         .build();
-        return new Registry(bridge, Map.copyOf(owners), Map.copyOf(failures));
+        return new Registry(bridge, owners, failures);
     }
 
-    private static Plugin plugin(String id) {
-        for (Plugin plugin : Bukkit.getPluginManager().getPlugins())
-            if (plugin.getName().equalsIgnoreCase(id)) return plugin;
+    private static Plugin plugin(String name) {
+        for (Plugin candidate : Bukkit.getPluginManager().getPlugins()) {
+            if (candidate.getName().equalsIgnoreCase(name)) return candidate;
+        }
         return null;
     }
 
     private static SourceFailure failure(
-            String provider, String id, String detail, Throwable cause) {
+            String provider, String id, String message, Throwable cause) {
         return new SourceFailure(
-                "External item 'itembridge:" + provider + ':' + id + "': " + detail, cause);
-    }
-
-    private static final class SourceFailure extends IllegalArgumentException {
-        SourceFailure(String message, Throwable cause) {
-            super(message, cause);
-        }
+                "External item 'itembridge:" + provider + ":" + id + "': " + message, cause);
     }
 }

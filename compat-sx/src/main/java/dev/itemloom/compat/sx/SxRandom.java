@@ -7,80 +7,97 @@ import java.util.List;
 import java.util.Map;
 import java.util.random.RandomGenerator;
 
-/** Weighted choices are compiled once; null local choices intentionally fall through to globals. */
+/** Ordered probability intervals with detached semantic input for revision fingerprints. */
 public final class SxRandom {
-    private final List<String> choices;
-    private final double[] cumulative;
+    private record Choice(double upper, String text) {}
 
-    private SxRandom(List<String> choices, List<Double> weights) {
-        this.choices = Collections.unmodifiableList(new ArrayList<>(choices));
-        cumulative = new double[weights.size()];
-        double total = 0;
-        for (int i = 0; i < weights.size(); i++) {
-            double weight = weights.get(i);
-            if (!Double.isFinite(weight) || weight < 0)
-                throw new IllegalArgumentException("Invalid SX random weight: " + weight);
-            cumulative[i] = total += weight;
+    private final List<Choice> choices;
+    private final double total;
+    private final Object semanticInput;
+
+    private SxRandom(Object input) {
+        Map<String, Object> raw = new LinkedHashMap<>();
+        raw.put("value", input);
+        semanticInput = new SxConfig(raw).get("value");
+        List<Choice> compiled = new ArrayList<>();
+        double sum = 0;
+        if (input instanceof List<?> list) {
+            boolean weighted = !list.isEmpty() && list.getFirst() instanceof Map<?, ?>;
+            for (Object element : list) {
+                if (weighted) {
+                    if (!(element instanceof Map<?, ?> map)) {
+                        throw new IllegalArgumentException("Mixed weighted random entries");
+                    }
+                    for (Map.Entry<?, ?> entry : map.entrySet()) {
+                        sum =
+                                append(
+                                        compiled,
+                                        sum,
+                                        Double.parseDouble(String.valueOf(entry.getKey())),
+                                        entry.getValue());
+                    }
+                } else {
+                    sum = append(compiled, sum, 1, element);
+                }
+            }
+        } else {
+            sum = append(compiled, sum, 1, input);
         }
-        if (!Double.isFinite(total) || total <= 0)
-            throw new IllegalArgumentException(
-                    "SX random weights must have a finite positive total");
+        if (!Double.isFinite(sum) || sum <= 0) {
+            throw new IllegalArgumentException("Random pool requires a finite positive total");
+        }
+        choices = List.copyOf(compiled);
+        total = sum;
+    }
+
+    private static double append(List<Choice> choices, double sum, double weight, Object value) {
+        if (!Double.isFinite(weight) || weight < 0 || !Double.isFinite(sum + weight)) {
+            throw new IllegalArgumentException("Invalid random weight: " + weight);
+        }
+        double next = sum + weight;
+        if (weight > 0) {
+            choices.add(new Choice(next, text(value)));
+        }
+        return next;
+    }
+
+    private static String text(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String source =
+                value instanceof List<?> lines
+                        ? String.join("\n", lines.stream().map(String::valueOf).toList())
+                        : value.toString();
+        return source.replace("/n", "\n")
+                .replace("\\n", "\n")
+                .replace("%DeleteLore%", "$<DeleteLore>");
     }
 
     public String pick(RandomGenerator random) {
-        double roll = random.nextDouble() * cumulative[cumulative.length - 1];
-        int low = 0, high = cumulative.length - 1;
-        while (low < high) {
-            int mid = (low + high) >>> 1;
-            if (roll < cumulative[mid]) high = mid;
-            else low = mid + 1;
+        double position = random.nextDouble() * total;
+        for (Choice choice : choices) {
+            if (position < choice.upper()) {
+                return choice.text();
+            }
         }
-        return choices.get(low);
+        return choices.getLast().text();
+    }
+
+    public Object semanticInput() {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        copy.put("value", semanticInput);
+        return new SxConfig(copy).get("value");
     }
 
     public static Map<String, SxRandom> compile(Map<String, ?> values) {
         Map<String, SxRandom> result = new LinkedHashMap<>();
         values.forEach(
                 (key, value) -> {
-                    if (key.startsWith("NoLoad")) return;
-                    List<String> choices = new ArrayList<>();
-                    List<Double> weights = new ArrayList<>();
-                    if (value instanceof List<?> list) {
-                        if (list.isEmpty())
-                            throw new IllegalArgumentException("Empty SX random list: " + key);
-                        boolean weighted = list.getFirst() instanceof Map;
-                        for (Object entry : list) {
-                            if (weighted) {
-                                if (!(entry instanceof Map<?, ?> map))
-                                    throw new IllegalArgumentException(
-                                            "Mixed SX random list: " + key);
-                                map.forEach(
-                                        (weight, choice) -> {
-                                            weights.add(Double.valueOf(weight.toString()));
-                                            choices.add(text(choice));
-                                        });
-                            } else {
-                                weights.add(1D);
-                                choices.add(text(entry));
-                            }
-                        }
-                    } else {
-                        weights.add(1D);
-                        choices.add(text(value));
+                    if (!key.startsWith("NoLoad")) {
+                        result.put(key, new SxRandom(value));
                     }
-                    result.put(key, new SxRandom(choices, weights));
                 });
         return Collections.unmodifiableMap(result);
-    }
-
-    private static String text(Object value) {
-        if (value == null) return null;
-        String text =
-                value instanceof List<?> list
-                        ? String.join("\n", list.stream().map(String::valueOf).toList())
-                        : value.toString();
-        return text.replace("/n", "\n")
-                .replace("\\n", "\n")
-                .replace("%DeleteLore%", "$<DeleteLore>");
     }
 }

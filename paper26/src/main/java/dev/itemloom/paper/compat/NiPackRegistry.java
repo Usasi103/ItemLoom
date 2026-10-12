@@ -1,17 +1,10 @@
 package dev.itemloom.paper.compat;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiSourceDirectory;
-import dev.itemloom.compat.ni.NiYaml;
+import dev.itemloom.compat.ni.*;
 import dev.itemloom.paper.compat.script.LegacyItemPack;
+import java.io.*;
+import java.util.*;
 
-/** Stable script-visible pack map with candidate-only reload, owned by one catalog revision. */
 public final class NiPackRegistry {
     public final NiPackRegistry INSTANCE = this;
     public final Map<String, LegacyItemPack> itemPacks;
@@ -23,10 +16,10 @@ public final class NiPackRegistry {
         values =
                 new RevisionMap<>(
                         owner::ensureActive,
-                        (id, pack) -> {
+                        (key, pack) -> {
                             if (!pack.ownedBy(owner))
                                 throw new IllegalArgumentException(
-                                        "Item pack belongs to a different catalog revision");
+                                        "Pack belongs to another revision");
                         },
                         () -> {});
         itemPacks = values;
@@ -37,13 +30,19 @@ public final class NiPackRegistry {
     }
 
     private Map<String, LegacyItemPack> compile(Map<String, Object> definitions) {
-        var containing = NiYaml.toSection(new NiConfig(definitions));
-        Map<String, LegacyItemPack> packs = new LinkedHashMap<>();
-        for (String id : containing.getKeys(false)) {
-            var config = containing.getConfigurationSection(id);
-            if (config != null) packs.put(id, new LegacyItemPack(owner, id, config));
-        }
-        return packs;
+        Map<String, LegacyItemPack> result = new LinkedHashMap<>();
+        definitions.forEach(
+                (id, value) -> {
+                    if (value instanceof Map<?, ?> map) {
+                        Map<String, Object> section = new LinkedHashMap<>();
+                        map.forEach((key, child) -> section.put(String.valueOf(key), child));
+                        result.put(
+                                id,
+                                new LegacyItemPack(
+                                        owner, id, NiConfigViews.section(new NiConfig(section))));
+                    }
+                });
+        return result;
     }
 
     public Map<String, LegacyItemPack> getItemPacks() {
@@ -52,23 +51,21 @@ public final class NiPackRegistry {
     }
 
     public List<String> getItemPackIdsRaw() {
-        return new ArrayList<>(getItemPacks().keySet());
+        return new ArrayList<>(values.keySet());
     }
 
     public List<String> getItemPackIds() {
-        var ids = getItemPackIdsRaw();
-        ids.sort(String::compareTo);
-        return ids;
+        return values.keySet().stream().sorted().toList();
     }
 
     public LegacyItemPack getItemPack(String id) {
-        return getItemPacks().get(id);
+        return values.get(id);
     }
 
     public void reload() {
         owner.ensureActive();
         try {
-            var source =
+            NiSourceDirectory source =
                     NiSourceDirectory.read(owner.catalog().inputRoot().resolve("ItemPacks"), true);
             Map<String, Object> definitions = new LinkedHashMap<>();
             source.sources()
@@ -79,11 +76,12 @@ public final class NiPackRegistry {
                                                             NiSourceDirectory.withoutBom(text),
                                                             path.toString())
                                                     .values()));
-            Runnable publish = values.prepareReplacement(compile(definitions));
+            Runnable replace = values.prepareReplacement(compile(definitions));
             source.verifyUnchanged();
-            publish.run();
-        } catch (IOException failure) {
-            throw new UncheckedIOException("Cannot reload item packs", failure);
+            owner.ensureActive();
+            replace.run();
+        } catch (IOException error) {
+            throw new UncheckedIOException(error);
         }
     }
 }

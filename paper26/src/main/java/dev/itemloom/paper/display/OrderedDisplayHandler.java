@@ -4,6 +4,7 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.ScheduledFuture;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
@@ -20,416 +21,397 @@ import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket;
 import net.minecraft.world.item.ItemStack;
 
-/**
- * One ordered queue per connection. Scripts are scheduled on the server thread; Netty never waits.
- * All later writes/flushes queue behind a display write, including non-item packets.
- * Queue pressure or a stalled server degrades this connection to canonical packets until reconnect.
- */
+/** Serializes outbound delivery while the main thread prepares display packets. */
 public final class OrderedDisplayHandler extends ChannelDuplexHandler {
     public record Rendered(Object packet, List<DisplayLedger.Sent> sent) {
+        public Rendered {
+            sent = List.copyOf(sent);
+        }
+
         public static Rendered unchanged(Object packet) {
             return new Rendered(packet, List.of());
         }
     }
 
-    private record Write(Object original, boolean render, int items, ChannelPromise promise) {
+    private static final int MAX_WRITES = 256;
+    private static final int MAX_ITEMS = 2048;
+
+    private static final class Pending {
+        final Object packet;
+        final ChannelPromise promise;
+        final int itemCount;
+        final boolean render;
+        Rendered result;
+
+        Pending(Object packet, ChannelPromise promise, int itemCount, boolean render) {
+            this.packet = packet;
+            this.promise = promise;
+            this.itemCount = itemCount;
+            this.render = render;
+        }
+
         boolean flush() {
             return promise == null;
         }
     }
 
-    private record Delivery(Write write, Rendered result) {}
-
-    private static final int MAX_WRITES = 256, MAX_ITEMS = 2048;
-
-    private static final class Batch {
-        final List<Write> writes;
+    private static final class Flight {
+        final List<Pending> entries;
         final AtomicBoolean cancelled = new AtomicBoolean();
-        io.netty.util.concurrent.ScheduledFuture<?> timeout;
+        ScheduledFuture<?> timeout;
 
-        Batch(List<Write> writes) {
-            this.writes = writes;
+        Flight(List<Pending> entries) {
+            this.entries = entries;
         }
     }
 
-    private Predicate<Object> needsRender;
-    private BiFunction<Object, BooleanSupplier, Rendered> render;
-    private Consumer<Runnable> main;
-    private volatile Consumer<Throwable> error;
+    private Predicate<Object> wanted;
+    private BiFunction<Object, BooleanSupplier, Rendered> renderer;
+    private Consumer<Runnable> scheduler;
+    private Consumer<Throwable> errors;
     private Runnable resync;
     private final Predicate<ItemStack> managed;
     private final DisplayLedger ledger;
-    private final List<Write> waiting = new ArrayList<>();
-    private final ArrayDeque<Delivery> ready = new ArrayDeque<>();
-    private final AtomicBoolean resyncQueued = new AtomicBoolean();
-    private Batch inFlight;
-    private int writes, items;
-    private boolean passthrough, dispatchQueued, delivering, terminated;
+    private final ArrayDeque<Pending> queue = new ArrayDeque<>();
+    private final AtomicBoolean resyncPending = new AtomicBoolean();
+    private Flight flight;
+    private int items;
+    private boolean startQueued;
+    private boolean delivering;
+    private boolean passthrough;
+    private volatile boolean terminated;
 
     public OrderedDisplayHandler(
-            Predicate<Object> needsRender,
-            BiFunction<Object, BooleanSupplier, Rendered> render,
-            Consumer<Runnable> main,
-            Consumer<Throwable> error,
+            Predicate<Object> wanted,
+            BiFunction<Object, BooleanSupplier, Rendered> renderer,
+            Consumer<Runnable> scheduler,
+            Consumer<Throwable> errors,
             Runnable resync,
             Predicate<ItemStack> managed,
             DisplayLedger ledger) {
-        this.needsRender = needsRender;
-        this.render = render;
-        this.main = main;
-        this.error = error;
+        this.wanted = wanted;
+        this.renderer = renderer;
+        this.scheduler = scheduler;
+        this.errors = errors;
         this.resync = resync;
         this.managed = managed;
         this.ledger = ledger;
     }
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+    public synchronized void write(
+            ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
         if (terminated) {
-            ReferenceCountUtil.release(message);
-            promise.tryFailure(new ClosedChannelException());
+            discard(message, promise);
             return;
         }
-        if (passthrough) {
-            pass(ctx, message, promise);
-            return;
-        }
-        boolean wanted;
+        boolean render = false;
+        int count = 0;
         try {
-            wanted = needsRender.test(message);
+            render = !passthrough && wanted.test(message);
+            if (render) {
+                int[] visited = {0};
+                ItemPackets.any(message, (item, ordinary) -> ++visited[0] > MAX_ITEMS);
+                count = visited[0];
+            }
         } catch (RuntimeException failure) {
             fallback(ctx, failure);
-            pass(ctx, message, promise);
-            return;
         }
-        if (!wanted && inFlight == null && waiting.isEmpty() && !delivering) {
-            ctx.write(message, promise);
-            return;
-        }
-        if (writes >= MAX_WRITES) {
-            fallback(
-                    ctx,
-                    new IllegalStateException("Display queue exceeded " + MAX_WRITES + " writes"));
-            pass(ctx, message, promise);
-            return;
-        }
-        Object snapshot = message;
-        int stackCount = 0;
-        if (wanted) {
-            int[] count = {0};
-            try {
-                snapshot =
-                        ItemPackets.map(
-                                message,
-                                (stack, ordinary) -> {
-                                    if (++count[0] + items > MAX_ITEMS)
-                                        throw new IllegalStateException(
-                                                "Display queue exceeded "
-                                                        + MAX_ITEMS
-                                                        + " item stacks");
-                                    return ProofItemCopies.copy(stack);
-                                });
-            } catch (RuntimeException failure) {
-                fallback(ctx, failure);
-                pass(ctx, message, promise);
+        if (queue.size() >= MAX_WRITES || items + count > MAX_ITEMS) {
+            if (passthrough && delivering) {
+                discard(message, promise);
+                terminate();
+                ctx.close();
                 return;
             }
-            items += count[0];
-            stackCount = count[0];
+            fallback(ctx, new IllegalStateException("Display queue capacity exceeded"));
+            render = false;
+            count = 0;
         }
-        waiting.add(new Write(snapshot, wanted, stackCount, promise));
-        writes++;
-        dispatch(ctx);
+        Object owned = message;
+        if (render && !passthrough) {
+            try {
+                owned = ItemPackets.map(message, (item, ordinary) -> ProofItemCopies.copy(item));
+                if (owned != message) ReferenceCountUtil.release(message);
+            } catch (RuntimeException failure) {
+                fallback(ctx, failure);
+                render = false;
+                count = 0;
+            }
+        }
+        queue.addLast(new Pending(owned, promise, count, render && !passthrough));
+        items += count;
+        advance(ctx);
     }
 
     @Override
-    public void flush(ChannelHandlerContext ctx) {
-        if (inFlight == null && waiting.isEmpty() && !delivering) {
-            ctx.flush();
-            return;
-        }
-        if (waiting.isEmpty() || !waiting.getLast().flush())
-            waiting.add(new Write(null, false, 0, null));
+    public synchronized void flush(ChannelHandlerContext ctx) {
+        if (terminated) return;
+        if (!queue.isEmpty() && queue.peekLast().flush()) return;
+        queue.addLast(new Pending(null, null, 0, false));
+        if (queue.size() > MAX_WRITES)
+            fallback(ctx, new IllegalStateException("Display queue capacity exceeded"));
+        advance(ctx);
     }
 
-    private void dispatch(ChannelHandlerContext ctx) {
-        if (dispatchQueued || inFlight != null || waiting.isEmpty() || delivering) return;
-        dispatchQueued = true;
-        ctx.executor()
-                .execute(
-                        () -> {
-                            dispatchQueued = false;
-                            if (waiting.isEmpty() || !ctx.channel().isActive()) return;
-                            if (passthrough || waiting.stream().noneMatch(Write::render)) {
-                                waiting.forEach(
-                                        write ->
-                                                ready.addLast(
-                                                        new Delivery(
-                                                                write,
-                                                                Rendered.unchanged(
-                                                                        write.original()))));
-                                waiting.clear();
-                                deliver(ctx);
-                                return;
-                            }
-                            Batch batch = new Batch(List.copyOf(waiting));
-                            waiting.clear();
-                            inFlight = batch;
-                            batch.timeout =
-                                    ctx.executor()
-                                            .schedule(
-                                                    () -> {
-                                                        if (inFlight == batch)
-                                                            fallback(
-                                                                    ctx,
-                                                                    new IllegalStateException(
-                                                                            "Display rendering exceeded 250 ms; using canonical packets"));
-                                                    },
-                                                    250,
-                                                    TimeUnit.MILLISECONDS);
-                            try {
-                                var renderer = render;
-                                main.accept(
-                                        () -> {
-                                            List<Rendered> output =
-                                                    new ArrayList<>(batch.writes.size());
-                                            for (Write write : batch.writes) {
-                                                if (batch.cancelled.get()) return;
-                                                if (write.flush() || !write.render()) {
-                                                    output.add(
-                                                            Rendered.unchanged(write.original()));
-                                                    continue;
-                                                }
-                                                try {
-                                                    output.add(
-                                                            renderer.apply(
-                                                                    write.original(),
-                                                                    () -> !batch.cancelled.get()));
-                                                } catch (RuntimeException failure) {
-                                                    report(failure);
-                                                    output.add(
-                                                            Rendered.unchanged(write.original()));
-                                                }
-                                            }
-                                            if (!batch.cancelled.get())
-                                                ctx.executor()
-                                                        .execute(
-                                                                () -> complete(ctx, batch, output));
-                                        });
-                            } catch (RuntimeException failure) {
-                                fallback(ctx, failure);
-                            }
-                        });
-    }
-
-    private void complete(ChannelHandlerContext ctx, Batch batch, List<Rendered> output) {
-        if (inFlight != batch || batch.cancelled.get()) return;
-        batch.timeout.cancel(false);
-        inFlight = null;
-        for (int i = 0; i < batch.writes.size(); i++)
-            ready.addLast(new Delivery(batch.writes.get(i), output.get(i)));
-        deliver(ctx);
-    }
-
-    /** Remove ownership before invoking downstream handlers: their completion listeners may reenter or close. */
-    private void deliver(ChannelHandlerContext ctx) {
-        if (delivering) return;
+    private void advance(ChannelHandlerContext ctx) {
+        if (terminated || delivering || flight != null) return;
         delivering = true;
         try {
-            while (!ready.isEmpty()) {
-                Delivery delivery = ready.removeFirst();
-                Write write = delivery.write();
-                if (write.flush()) {
-                    ctx.flush();
-                    continue;
-                }
-                writes--;
-                items -= write.items();
-                Rendered rendered = delivery.result();
-                if (passthrough || rendered.sent().isEmpty()) {
-                    writeCanonical(
-                            ctx,
-                            passthrough ? write.original() : rendered.packet(),
-                            write.promise());
-                } else {
-                    ChannelPromise promise = write.promise().unvoid();
-                    promise.addListener(
-                            future -> {
-                                if (future.isSuccess() && ctx.channel().isActive())
-                                    rendered.sent().forEach(ledger::commit);
-                            });
-                    ctx.write(rendered.packet(), promise);
-                }
+            while (!queue.isEmpty() && !terminated) {
+                Pending head = queue.peekFirst();
+                if (!passthrough && head.render && head.result == null) break;
+                queue.removeFirst();
+                items -= head.itemCount;
+                deliver(ctx, head);
             }
         } finally {
             delivering = false;
         }
-        if (waiting.isEmpty() && inFlight == null) {
-            writes = 0;
-            items = 0;
-        } else dispatch(ctx);
+        if (!queue.isEmpty() && !terminated && !passthrough && !startQueued) {
+            startQueued = true;
+            try {
+                ctx.executor().execute(() -> start(ctx));
+            } catch (RuntimeException failure) {
+                startQueued = false;
+                fallback(ctx, failure);
+            }
+        }
     }
 
-    private void fallback(ChannelHandlerContext ctx, Throwable cause) {
-        if (passthrough) return;
+    private synchronized void start(ChannelHandlerContext ctx) {
+        startQueued = false;
+        if (terminated || passthrough || flight != null || queue.isEmpty()) return;
+        Flight current = new Flight(List.copyOf(queue));
+        flight = current;
+        var render = renderer;
+        var main = scheduler;
+        try {
+            current.timeout =
+                    ctx.executor()
+                            .schedule(() -> timeout(ctx, current), 250, TimeUnit.MILLISECONDS);
+            main.accept(() -> render(ctx, current, render));
+        } catch (RuntimeException failure) {
+            fallback(ctx, failure);
+        }
+    }
+
+    private void render(
+            ChannelHandlerContext ctx,
+            Flight current,
+            BiFunction<Object, BooleanSupplier, Rendered> callback) {
+        var completed = new ArrayList<Rendered>(current.entries.size());
+        for (Pending pending : current.entries) {
+            if (current.cancelled.get() || terminated) return;
+            Rendered result = Rendered.unchanged(pending.packet);
+            if (pending.render) {
+                try {
+                    result =
+                            callback.apply(
+                                    pending.packet, () -> !current.cancelled.get() && !terminated);
+                    if (result == null)
+                        throw new IllegalArgumentException("Display renderer returned null");
+                } catch (RuntimeException failure) {
+                    report(failure);
+                }
+            }
+            completed.add(result);
+        }
+        try {
+            ctx.executor().execute(() -> finish(ctx, current, completed));
+        } catch (RuntimeException rejected) {
+            synchronized (this) {
+                terminate();
+            }
+        }
+    }
+
+    private synchronized void finish(
+            ChannelHandlerContext ctx, Flight current, List<Rendered> results) {
+        if (terminated || flight != current || current.cancelled.get()) return;
+        flight = null;
+        current.timeout.cancel(false);
+        for (int index = 0; index < current.entries.size(); index++)
+            current.entries.get(index).result = results.get(index);
+        advance(ctx);
+    }
+
+    private synchronized void timeout(ChannelHandlerContext ctx, Flight current) {
+        if (flight == current && !terminated)
+            fallback(ctx, new IllegalStateException("Display rendering timed out"));
+    }
+
+    private void fallback(ChannelHandlerContext ctx, Throwable failure) {
+        if (passthrough || terminated) return;
+        report(failure);
+        stopRendering(ctx);
+    }
+
+    public synchronized void stopRendering(ChannelHandlerContext ctx) {
         passthrough = true;
-        report(cause);
-        if (inFlight != null) {
-            inFlight.cancelled.set(true);
-            inFlight.timeout.cancel(false);
-            for (Write write : inFlight.writes)
-                ready.addLast(new Delivery(write, Rendered.unchanged(write.original())));
-            inFlight = null;
-        }
-        for (Write write : waiting)
-            ready.addLast(new Delivery(write, Rendered.unchanged(write.original())));
-        waiting.clear();
-        deliver(ctx);
-    }
-
-    private void report(Throwable cause) {
-        var sink = error;
-        if (sink != null && cause != null) sink.accept(cause);
-    }
-
-    private void pass(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
-        if (!delivering && waiting.isEmpty()) {
-            writeCanonical(ctx, message, promise);
-            return;
-        }
-        if (writes >= MAX_WRITES) {
-            ReferenceCountUtil.release(message);
-            promise.tryFailure(new IllegalStateException("Recursive outbound queue overflow"));
-            ctx.close();
-            return;
-        }
-        waiting.add(new Write(message, false, 0, promise));
-        writes++;
-        dispatch(ctx);
-    }
-
-    private void writeCanonical(ChannelHandlerContext ctx, Object packet, ChannelPromise promise) {
-        List<DisplayLedger.Sent> originals = new ArrayList<>();
-        ItemPackets.any(
-                packet,
-                (stack, inventory) -> {
-                    if (!stack.isEmpty() && !DisplayLedger.marked(stack) && managed.test(stack))
-                        originals.add(DisplayLedger.canonical(stack));
-                    return false;
-                });
-        if (!originals.isEmpty()) {
-            promise = promise.unvoid();
-            promise.addListener(
-                    future -> {
-                        if (future.isSuccess() && ctx.channel().isActive())
-                            originals.forEach(ledger::commit);
-                    });
-        }
-        ctx.write(packet, promise);
-    }
-
-    /** Keep the minimal return guard until disconnect, including late creative packets after disable. */
-    public void stopRendering(ChannelHandlerContext ctx) {
-        fallback(ctx, null);
-        needsRender = null;
-        render = null;
-        main = null;
-        error = null;
+        cancelFlight();
+        for (Pending entry : queue) entry.result = null;
+        wanted = null;
+        renderer = null;
+        scheduler = null;
+        errors = null;
         resync = null;
+        resyncPending.set(false);
+        advance(ctx);
+    }
+
+    private void deliver(ChannelHandlerContext ctx, Pending pending) {
+        if (pending.flush()) {
+            ctx.flush();
+            return;
+        }
+        Rendered rendered = passthrough ? null : pending.result;
+        Object outgoing = rendered == null ? pending.packet : rendered.packet();
+        var proofs = new ArrayList<DisplayLedger.Sent>();
+        if (rendered != null) proofs.addAll(rendered.sent());
+        try {
+            ItemPackets.any(
+                    outgoing,
+                    (item, ordinary) -> {
+                        if (!item.isEmpty()
+                                && !DisplayLedger.marked(item)
+                                && !DisplayLedger.hasNestedMarker(item)
+                                && managed.test(item)) {
+                            proofs.add(DisplayLedger.canonical(item));
+                        }
+                        return false;
+                    });
+        } catch (RuntimeException failure) {
+            report(failure);
+        }
+        ChannelPromise promise = proofs.isEmpty() ? pending.promise : pending.promise.unvoid();
+        if (!proofs.isEmpty())
+            promise.addListener(
+                    done -> {
+                        if (done.isSuccess() && ctx.channel().isActive() && !terminated) {
+                            for (var proof : proofs) ledger.commit(proof);
+                        }
+                    });
+        if (outgoing != pending.packet) ReferenceCountUtil.release(pending.packet);
+        try {
+            ctx.write(outgoing, promise);
+        } catch (RuntimeException failure) {
+            ReferenceCountUtil.release(outgoing);
+            promise.tryFailure(failure);
+        }
+    }
+
+    private void report(Throwable failure) {
+        Consumer<Throwable> target;
+        synchronized (this) {
+            target = errors;
+        }
+        if (target != null) {
+            try {
+                target.accept(failure);
+            } catch (RuntimeException ignored) {
+                /* Reporting cannot disrupt ordering. */
+            }
+        }
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object message) {
-        if (message instanceof ServerboundSetCreativeModeSlotPacket packet) {
-            ItemStack incoming = packet.itemStack();
-            if (DisplayLedger.hasNestedMarker(incoming)) {
+    public synchronized void channelRead(ChannelHandlerContext ctx, Object message) {
+        if (terminated) {
+            ReferenceCountUtil.release(message);
+            return;
+        }
+        if (message instanceof ServerboundSetCreativeModeSlotPacket creative) {
+            ItemStack item = creative.itemStack();
+            ItemStack restored = null;
+            boolean reject = DisplayLedger.hasNestedMarker(item);
+            if (!reject && DisplayLedger.marked(item)) {
+                restored = ledger.restore(item);
+                reject = restored == null;
+            } else if (!reject && !item.isEmpty() && managed.test(item)) {
+                reject = !ledger.knownOriginal(item);
+            }
+            if (reject) {
+                ReferenceCountUtil.release(message);
                 requestResync();
                 return;
             }
-            if (DisplayLedger.marked(incoming)) {
-                ItemStack original = ledger.restore(incoming);
-                if (original == null) {
-                    requestResync();
-                    return;
-                }
-                message = new ServerboundSetCreativeModeSlotPacket(packet.slotNum(), original);
-            } else if (managed.test(incoming) && !ledger.knownOriginal(incoming)) {
-                requestResync();
-                return;
-            }
-        } else if (message instanceof ServerboundContainerClickPacket packet
-                && ledger.size() != 0) {
-            var slots = new Int2ObjectOpenHashMap<HashedStack>();
-            packet.changedSlots()
-                    .int2ObjectEntrySet()
-                    .forEach(
-                            entry ->
-                                    slots.put(
-                                            entry.getIntKey(),
-                                            ledger.acceptSent(entry.getValue())));
+            if (restored != null)
+                message = new ServerboundSetCreativeModeSlotPacket(creative.slotNum(), restored);
+        } else if (message instanceof ServerboundContainerClickPacket click && ledger.size() != 0) {
+            var changes = new Int2ObjectOpenHashMap<HashedStack>();
+            click.changedSlots()
+                    .forEach((slot, claim) -> changes.put(slot, ledger.acceptSent(claim)));
             message =
                     new ServerboundContainerClickPacket(
-                            packet.containerId(),
-                            packet.stateId(),
-                            packet.slotNum(),
-                            packet.buttonNum(),
-                            packet.containerInput(),
-                            slots,
-                            ledger.acceptSent(packet.carriedItem()));
+                            click.containerId(),
+                            click.stateId(),
+                            click.slotNum(),
+                            click.buttonNum(),
+                            click.containerInput(),
+                            changes,
+                            ledger.acceptSent(click.carriedItem()));
         }
         ctx.fireChannelRead(message);
     }
 
     private void requestResync() {
-        Consumer<Runnable> scheduler = main;
-        Runnable refresh = resync;
-        if (scheduler == null || refresh == null || !resyncQueued.compareAndSet(false, true))
-            return;
+        var main = scheduler;
+        var refresh = resync;
+        if (main == null || refresh == null || !resyncPending.compareAndSet(false, true)) return;
         try {
-            scheduler.accept(
+            main.accept(
                     () -> {
-                        resyncQueued.set(false);
-                        refresh.run();
+                        try {
+                            if (!terminated && resyncPending.get()) refresh.run();
+                        } finally {
+                            resyncPending.set(false);
+                        }
                     });
-        } catch (RuntimeException ignored) {
-            resyncQueued.set(false);
+        } catch (RuntimeException failure) {
+            resyncPending.set(false);
+            report(failure);
         }
     }
 
-    private void discard() {
-        passthrough = true;
+    private void cancelFlight() {
+        if (flight == null) return;
+        flight.cancelled.set(true);
+        if (flight.timeout != null) flight.timeout.cancel(false);
+        flight = null;
+    }
+
+    private void terminate() {
+        if (terminated) return;
         terminated = true;
-        var failure = new ClosedChannelException();
-        if (inFlight != null) {
-            inFlight.cancelled.set(true);
-            inFlight.timeout.cancel(false);
-            inFlight.writes.forEach(write -> fail(write, failure));
-            inFlight = null;
+        cancelFlight();
+        while (!queue.isEmpty()) {
+            Pending pending = queue.removeFirst();
+            if (!pending.flush()) discard(pending.packet, pending.promise);
         }
-        waiting.forEach(write -> fail(write, failure));
-        waiting.clear();
-        ready.forEach(delivery -> fail(delivery.write(), failure));
-        ready.clear();
-        writes = 0;
         items = 0;
         ledger.clear();
+        wanted = null;
+        renderer = null;
+        scheduler = null;
+        errors = null;
+        resync = null;
+        resyncPending.set(false);
     }
 
-    private static void fail(Write write, Throwable failure) {
-        if (!write.flush()) {
-            ReferenceCountUtil.release(write.original());
-            write.promise().tryFailure(failure);
-        }
+    private static void discard(Object message, ChannelPromise promise) {
+        ReferenceCountUtil.release(message);
+        promise.tryFailure(new ClosedChannelException());
     }
 
     @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        discard();
+    public synchronized void channelInactive(ChannelHandlerContext ctx) {
+        terminate();
         ctx.fireChannelInactive();
     }
 
     @Override
-    public void handlerRemoved(ChannelHandlerContext ctx) {
-        discard();
+    public synchronized void handlerRemoved(ChannelHandlerContext ctx) {
+        terminate();
     }
 }

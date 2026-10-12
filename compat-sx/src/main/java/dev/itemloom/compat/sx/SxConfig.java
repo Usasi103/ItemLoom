@@ -8,10 +8,10 @@ import java.util.Map;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.inventory.ItemStack;
 
-/** Detached SX input. Dotted YAML paths are expanded by Bukkit before this snapshot is made. */
+/** An owned, ordered configuration tree. */
 public record SxConfig(Map<String, Object> values) {
     public SxConfig {
-        values = freeze(values);
+        values = Collections.unmodifiableMap(stringKeys(values));
     }
 
     public static SxConfig from(ConfigurationSection section) {
@@ -32,40 +32,53 @@ public record SxConfig(Map<String, Object> values) {
     }
 
     public List<String> strings(String key) {
-        if (!(get(key) instanceof List<?> list)) return List.of();
-        return list.stream()
-                .filter(v -> v instanceof String || v instanceof Number || v instanceof Boolean)
-                .map(Object::toString)
-                .toList();
+        List<String> result = new ArrayList<>();
+        if (get(key) instanceof List<?> list) {
+            for (Object value : list) {
+                if (value instanceof String
+                        || value instanceof Number
+                        || value instanceof Boolean) {
+                    result.add(value.toString());
+                }
+            }
+        }
+        return result;
     }
 
     public SxConfig section(String key) {
-        return get(key) instanceof Map<?, ?> map
-                ? new SxConfig(stringKeys(map))
-                : new SxConfig(Map.of());
+        return new SxConfig(get(key) instanceof Map<?, ?> map ? stringKeys(map) : Map.of());
     }
 
     public static Map<String, Object> stringKeys(Map<?, ?> source) {
         Map<String, Object> result = new LinkedHashMap<>();
-        source.forEach((k, v) -> result.put(String.valueOf(k), v));
+        source.forEach((key, value) -> result.put(String.valueOf(key), snapshot(value)));
         return result;
     }
 
-    private static Map<String, Object> freeze(Map<String, Object> values) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        values.forEach((key, value) -> result.put(key, detach(value)));
-        return Collections.unmodifiableMap(result);
-    }
-
-    private static Object detach(Object value) {
-        if (value instanceof ConfigurationSection section) return freeze(section.getValues(false));
-        if (value instanceof Map<?, ?> map) return freeze(stringKeys(map));
+    private static Object snapshot(Object value) {
+        if (value instanceof ConfigurationSection section) {
+            return Collections.unmodifiableMap(stringKeys(section.getValues(false)));
+        }
+        if (value instanceof Map<?, ?> map) {
+            return Collections.unmodifiableMap(stringKeys(map));
+        }
         if (value instanceof List<?> list) {
-            List<Object> result = new ArrayList<>();
-            list.forEach(v -> result.add(detach(v)));
+            List<Object> result = new ArrayList<>(list.size());
+            list.forEach(entry -> result.add(snapshot(entry)));
             return Collections.unmodifiableList(result);
         }
-        if (value instanceof ItemStack item) return item.clone();
+        if (value instanceof ItemStack item) {
+            return item.clone();
+        }
+        if (value instanceof byte[] array) {
+            return array.clone();
+        }
+        if (value instanceof int[] array) {
+            return array.clone();
+        }
+        if (value instanceof long[] array) {
+            return array.clone();
+        }
         return value;
     }
 }

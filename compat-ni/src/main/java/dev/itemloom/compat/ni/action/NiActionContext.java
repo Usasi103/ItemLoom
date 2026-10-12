@@ -1,95 +1,79 @@
 package dev.itemloom.compat.ni.action;
 
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiScripts;
+import dev.itemloom.compat.ni.*;
 import dev.itemloom.compat.ni.script.LegacyActionResult;
 import dev.itemloom.core.ActionFlow;
-
+import java.util.*;
+import java.util.function.*;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.inventory.ItemStack;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.IdentityHashMap;
-import java.util.Map;
-import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
-
-/** An action call's view of shared variables, with its own evaluation and thread status. */
 public final class NiActionContext implements Cloneable {
     private static final ThreadLocal<NiActionContext> CURRENT = new ThreadLocal<>();
 
-    private final SharedState shared;
-    private NiEvaluation evaluation;
-    private boolean sync;
+    private record BindingEdit(boolean present, Object value) {}
 
-    /** Presence matters: removing a binding and assigning null have different script semantics. */
-    private record Binding(boolean present, Object value) {
-        static Binding at(Map<String, Object> values, String name) {
-            return new Binding(values.containsKey(name), values.get(name));
-        }
-
-        void apply(Map<String, Object> values, String name) {
-            if (present) values.put(name, value);
-            else values.remove(name);
-        }
-    }
-
-    /** All accesses to mutable scope state use the revision's script monitor. */
-    private static final class SharedState {
-        final NiScripts scripts;
+    private static final class Shared {
         final Object caster;
         final Map<String, Object> global;
         final Map<String, Object> params;
         final BooleanSupplier active;
-        final Map<NiContextKey<?>, Object> keys = new IdentityHashMap<>();
-        Map<String, Object> initialNames;
-        Map<String, Binding> pending = new java.util.LinkedHashMap<>();
+        final NiScripts scripts;
+        final IdentityHashMap<NiContextKey<?>, Object> keys = new IdentityHashMap<>();
+        final Map<String, Object> initial = new HashMap<>();
+        final Map<String, BindingEdit> edits = new LinkedHashMap<>();
         NiScripts.Scope scope;
 
-        SharedState(
-                NiScripts scripts,
+        Shared(
                 Object caster,
                 Map<String, Object> global,
                 Map<String, Object> params,
                 BooleanSupplier active,
-                NiActionContext context) {
-            this.scripts = scripts;
+                NiScripts scripts) {
             this.caster = caster;
-            this.global = global == null ? Collections.synchronizedMap(new HashMap<>()) : global;
+            this.global = global;
             this.params = params;
             this.active = active;
-            initialNames = params == null ? new HashMap<>() : new HashMap<>(params);
-            initialNames.put("target", caster);
-            initialNames.put("player", caster instanceof Player player ? player : null);
-            initialNames.put("global", this.global);
-            initialNames.put("glo", this.global);
-            initialNames.put("context", context);
+            this.scripts = scripts;
+            if (params != null) initial.putAll(params);
         }
 
-        NiScripts.Scope resolve() {
+        Map<String, Object> bindings() {
             if (scope == null) {
-                NiScripts.Scope created = scripts.actionScope(initialNames);
-                pending.forEach((name, binding) -> binding.apply(created.bindings(), name));
-                scope = created;
-                pending = null;
-                initialNames = null;
+                scope = scripts.actionScope(initial);
+                edits.forEach(
+                        (key, edit) -> {
+                            if (edit.present) scope.bindings().put(key, edit.value);
+                            else scope.bindings().remove(key);
+                        });
+                edits.clear();
             }
-            return scope;
+            return scope.bindings();
         }
 
-        Binding binding(String name) {
-            if (scope != null) return Binding.at(scope.bindings(), name);
-            Binding change = pending.get(name);
-            return change == null ? Binding.at(initialNames, name) : change;
+        BindingEdit read(String name) {
+            if (scope != null)
+                return new BindingEdit(
+                        scope.bindings().containsKey(name), scope.bindings().get(name));
+            return edits.getOrDefault(
+                    name, new BindingEdit(initial.containsKey(name), initial.get(name)));
         }
 
-        void bind(String name, Binding binding) {
-            if (scope == null) pending.put(name, binding);
-            else binding.apply(scope.bindings(), name);
+        void write(String name, BindingEdit edit) {
+            if (scope == null) edits.put(name, edit);
+            else if (edit.present) scope.bindings().put(name, edit.value);
+            else scope.bindings().remove(name);
         }
+    }
+
+    private final Shared shared;
+    private NiEvaluation evaluation;
+    private boolean sync = mainThread();
+
+    private static boolean mainThread() {
+        return Bukkit.getServer() == null || Bukkit.isPrimaryThread();
     }
 
     public NiActionContext() {
@@ -128,24 +112,24 @@ public final class NiActionContext implements Cloneable {
             Map<String, Object> suppliedGlobal,
             Map<String, Object> params,
             BooleanSupplier active) {
-        NiScripts scripts = evaluation.scripts();
-        synchronized (scripts) {
-            if (!scripts.isOpen())
-                throw new IllegalStateException("Script revision has been closed");
-            shared = new SharedState(scripts, caster, suppliedGlobal, params, active, this);
-            this.evaluation = evaluation.withActionCache(shared.global);
-        }
-        sync = primaryThread();
+        if (!evaluation.scripts().isOpen())
+            throw new IllegalStateException("Script revision has been closed");
+        Map<String, Object> global =
+                suppliedGlobal == null
+                        ? Collections.synchronizedMap(new HashMap<>())
+                        : suppliedGlobal;
+        shared = new Shared(caster, global, params, active, evaluation.scripts());
+        shared.initial.put("target", caster);
+        shared.initial.put("player", caster instanceof Player ? caster : null);
+        shared.initial.put("global", global);
+        shared.initial.put("glo", global);
+        shared.initial.put("context", this);
+        this.evaluation = evaluation.withActionCache(global);
     }
 
-    private NiActionContext(SharedState shared, NiEvaluation evaluation) {
-        this.shared = shared;
-        this.evaluation = evaluation;
-        sync = primaryThread();
-    }
-
-    private static boolean primaryThread() {
-        return Bukkit.getServer() == null || Bukkit.isPrimaryThread();
+    private NiActionContext(NiActionContext original) {
+        shared = original.shared;
+        evaluation = original.evaluation;
     }
 
     public NiEvaluation evaluation() {
@@ -174,7 +158,7 @@ public final class NiActionContext implements Cloneable {
 
     public Map<String, Object> getBindings() {
         synchronized (shared.scripts) {
-            return shared.resolve().bindings();
+            return shared.bindings();
         }
     }
 
@@ -205,11 +189,11 @@ public final class NiActionContext implements Cloneable {
 
     public void refreshParams() {
         synchronized (shared.scripts) {
-            if (shared.params == null) return;
-            shared.params.forEach(
-                    (name, value) -> {
-                        if (value != null) shared.bind(name, new Binding(true, value));
-                    });
+            if (shared.params != null)
+                shared.params.forEach(
+                        (name, value) -> {
+                            if (value != null) shared.write(name, new BindingEdit(true, value));
+                        });
         }
     }
 
@@ -237,7 +221,10 @@ public final class NiActionContext implements Cloneable {
     public <T> void set(NiContextKey<T> key, T value) {
         synchronized (shared.scripts) {
             shared.keys.put(key, value);
-            updateAliases(key, new Binding(true, value));
+            for (String name : key.getNames()) {
+                shared.write(name, new BindingEdit(true, value));
+                if (key.isPutInGlobal()) shared.global.put(name, value);
+            }
             if (key == NiContextKeys.SECTION_CACHE)
                 evaluation = evaluation.withActionCache(getSectionCache());
         }
@@ -247,25 +234,19 @@ public final class NiActionContext implements Cloneable {
     public <T> T remove(NiContextKey<T> key) {
         synchronized (shared.scripts) {
             T previous = (T) shared.keys.remove(key);
-            updateAliases(key, new Binding(false, null));
+            for (String name : key.getNames()) {
+                shared.write(name, new BindingEdit(false, null));
+                if (key.isPutInGlobal()) shared.global.remove(name);
+            }
             if (key == NiContextKeys.SECTION_CACHE)
                 evaluation = evaluation.withActionCache(shared.global);
             return previous;
         }
     }
 
-    private void updateAliases(NiContextKey<?> key, Binding binding) {
-        for (String name : key.getNames()) {
-            if (key.isPutInGlobal()) binding.apply(shared.global, name);
-            shared.bind(name, binding);
-        }
-    }
-
     @Override
     public NiActionContext clone() {
-        synchronized (shared.scripts) {
-            return new NiActionContext(shared, evaluation);
-        }
+        return new NiActionContext(this);
     }
 
     public static NiActionContext empty() {
@@ -279,32 +260,36 @@ public final class NiActionContext implements Cloneable {
     public String parse(String text) {
         return invoke(
                 () -> {
-                    NiEvaluation parser =
+                    NiEvaluation context =
                             has(NiContextKeys.SECTIONS)
                                     ? evaluation.withSections(
                                             NiValues.config(get(NiContextKeys.SECTIONS)))
                                     : evaluation;
-                    return parser.text(text);
+                    return context.text(text);
                 });
     }
 
     public Object evaluate(String expression) {
         if (!active()) throw new IllegalStateException("Action context is no longer active");
-        return invoke(() -> shared.scripts.evaluate(expression, shared.resolve()));
+        return invoke(
+                () -> {
+                    shared.bindings();
+                    return shared.scripts.evaluate(expression, shared.scope);
+                });
     }
 
     public <T> T invoke(Supplier<T> operation) {
         synchronized (shared.scripts) {
-            NiActionContext previousCall = CURRENT.get();
-            Binding previousBinding = shared.binding("context");
+            NiActionContext previous = CURRENT.get();
+            BindingEdit binding = shared.read("context");
             CURRENT.set(this);
-            shared.bind("context", new Binding(true, this));
+            shared.write("context", new BindingEdit(true, this));
             try {
                 return evaluation.scoped(operation);
             } finally {
-                shared.bind("context", previousBinding);
-                if (previousCall == null) CURRENT.remove();
-                else CURRENT.set(previousCall);
+                shared.write("context", binding);
+                if (previous == null) CURRENT.remove();
+                else CURRENT.set(previous);
             }
         }
     }
@@ -313,9 +298,9 @@ public final class NiActionContext implements Cloneable {
         if (expression == null) return true;
         try {
             Object result = evaluate(expression);
-            if (result instanceof LegacyActionResult legacy) return !legacy.isStop();
-            if (result instanceof ActionFlow.Result flow) return !flow.stopped();
-            return Boolean.TRUE.equals(result);
+            return Boolean.TRUE.equals(result)
+                    || result instanceof LegacyActionResult legacy && !legacy.isStop()
+                    || result instanceof ActionFlow.Result flow && !flow.stopped();
         } catch (RuntimeException error) {
             evaluation.warning(
                     "Action condition failed: " + expression + ": " + error.getMessage());
@@ -325,9 +310,8 @@ public final class NiActionContext implements Cloneable {
 
     public static final class Builder {
         private Object caster;
-        private Map<String, Object> global;
-        private Map<String, Object> params;
-        private final Map<NiContextKey<?>, Object> keys = new HashMap<>();
+        private Map<String, Object> global, params;
+        private final Map<NiContextKey<?>, Object> keys = new IdentityHashMap<>();
 
         public Builder() {}
 
@@ -351,15 +335,11 @@ public final class NiActionContext implements Cloneable {
             return this;
         }
 
+        @SuppressWarnings({"rawtypes", "unchecked"})
         public NiActionContext build() {
             NiActionContext context = new NiActionContext(caster, global, params);
-            keys.forEach((key, value) -> apply(context, key, value));
+            keys.forEach((key, value) -> context.set((NiContextKey) key, value));
             return context;
-        }
-
-        @SuppressWarnings("unchecked")
-        private static <T> void apply(NiActionContext context, NiContextKey<T> key, Object value) {
-            context.set(key, (T) value);
         }
     }
 }

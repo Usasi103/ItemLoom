@@ -1,34 +1,26 @@
 package dev.itemloom.paper.compat;
 
+import dev.itemloom.api.ItemContext;
+import dev.itemloom.compat.ni.*;
+import dev.itemloom.core.*;
+import dev.itemloom.paper.display.ProofItemCopies;
+import dev.itemloom.paper.integration.*;
+import dev.itemloom.paper.nms.ItemStateCodec;
 import java.time.Clock;
-import java.util.Map;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
+import java.util.*;
+import java.util.function.*;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.CustomData;
-import dev.itemloom.compat.ni.NiCompiledItem;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiNodes;
-import dev.itemloom.compat.ni.NiScripts;
-import dev.itemloom.compat.ni.NiYaml;
-import dev.itemloom.core.GenerationContext;
-import dev.itemloom.core.ItemIdentity;
-import dev.itemloom.core.ItemRecipe;
-import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.inventory.ItemStack;
-import dev.itemloom.api.ItemContext;
-import dev.itemloom.paper.integration.ExternalItemMaterial;
-import dev.itemloom.paper.integration.OptionalItemSources;
-import org.bukkit.entity.Player;
 
-/** The frontend compiles an NI definition into the independent engine's recipe contract. */
 public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
-    /** Actual results of one expansion; compatibility hooks must never expand a second time. */
+    private static final int APPEARANCE_KEY_LIMIT = 16_384;
+
     public record Generated(
             ItemStack item,
             NiConfig expanded,
@@ -41,27 +33,26 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
         }
     }
 
+    private record LegacyView(ConfigurationSection config, ConfigurationSection sections) {}
+
     private final NiCompiledItem definition;
     private final NiDisplayTemplate display;
-    private final net.minecraft.world.item.ItemStack prototype;
-    private final boolean staticMaterial;
     private final NiNodes nodes;
     private final NiScripts scripts;
     private final NiEvaluation.Host host;
     private final NiItemData data;
-    private final int definitionHash;
     private final Consumer<String> warning;
+    private final OptionalItemSources sources;
     private final NiConfig fixed;
+    private final NiItemAppearance fixedAppearance;
     private final String staticExternal;
-    private final OptionalItemSources itemSources;
-
-    private record LegacyView(ConfigurationSection config, ConfigurationSection sections) {}
-
-    private volatile LegacyView legacyView;
-
-    private record Appearance(NiConfig config, net.minecraft.world.item.ItemStack prototype) {}
-
-    private Appearance appearance;
+    private final boolean hasStaticMaterial;
+    private final int definitionHash;
+    private final net.minecraft.world.item.ItemStack prototype;
+    private volatile LegacyView legacy;
+    private String previousAppearanceKey;
+    private boolean previousExternal;
+    private NiItemAppearance appearance;
 
     public NiPaperRecipe(
             NiCompiledItem definition,
@@ -70,7 +61,7 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
             NiEvaluation.Host host,
             Clock clock,
             Consumer<String> warning) {
-        this(definition, nodes, scripts, host, clock, warning, new OptionalItemSources());
+        this(definition, nodes, scripts, host, clock, warning, null);
     }
 
     public NiPaperRecipe(
@@ -80,34 +71,32 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
             NiEvaluation.Host host,
             Clock clock,
             Consumer<String> warning,
-            OptionalItemSources itemSources) {
+            OptionalItemSources sources) {
         this.definition = definition;
-        NiConfig displayConfig = definition.definition().section("client_bound_data");
-        display = displayConfig == null ? null : new NiDisplayTemplate(displayConfig);
         this.nodes = nodes;
         this.scripts = scripts;
         this.host = host;
         this.warning = warning;
-        this.itemSources = itemSources;
+        this.sources = sources;
         data = new NiItemData(clock);
-        fixed = definition.definition().section("static");
-        String fixedMaterial = fixed == null ? null : fixed.string("material");
-        staticExternal = ExternalItemMaterial.isExternal(fixedMaterial) ? fixedMaterial : null;
-        if (staticExternal != null) ExternalItemMaterial.parse(staticExternal);
-        staticMaterial = staticExternal != null || NiItemAppearance.material(fixedMaterial) != null;
-        prototype =
-                new NiItemAppearance(fixed, warning)
-                        .apply(new net.minecraft.world.item.ItemStack(Items.STONE));
+        NiConfig view = definition.definition();
         definitionHash =
-                NiYaml.write(
-                                new NiConfig(
-                                        Map.of(definition.id(), definition.definition().values())))
+                NiYaml.write(new NiConfig(Collections.singletonMap(definition.id(), view.values())))
                         .hashCode();
-        if (fixed != null && !prototype.isEmpty()) {
+        NiConfig displayConfig = view.section("client_bound_data");
+        display = displayConfig == null ? null : new NiDisplayTemplate(displayConfig);
+        NiConfig staticConfig = view.section("static");
+        fixed = staticConfig == null ? new NiConfig(Map.of()) : staticConfig;
+        fixedAppearance = new NiItemAppearance(fixed, warning);
+        String requested = fixed.string("material");
+        staticExternal = ExternalItemMaterial.isExternal(requested) ? requested : null;
+        if (staticExternal != null) ExternalItemMaterial.parse(staticExternal);
+        hasStaticMaterial = fixedAppearance.material() != null || staticExternal != null;
+        prototype = fixedAppearance.apply(new net.minecraft.world.item.ItemStack(Items.STONE));
+        if (!prototype.isEmpty())
             prototype.set(
                     DataComponents.CUSTOM_DATA,
-                    CustomData.of(data.apply(customData(prototype), fixed, null, definitionHash)));
-        }
+                    CustomData.of(data.apply(custom(prototype), fixed, null, definitionHash)));
     }
 
     public NiCompiledItem definition() {
@@ -122,29 +111,24 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
         return definitionHash;
     }
 
-    /** NI holds a live sections reference while its template, hash and other compiled fields stay fixed. */
+    private LegacyView legacy() {
+        LegacyView current = legacy;
+        if (current != null) return current;
+        synchronized (this) {
+            if (legacy == null) {
+                ConfigurationSection config = NiConfigViews.section(definition.definition());
+                legacy = new LegacyView(config, config.getConfigurationSection("sections"));
+            }
+            return legacy;
+        }
+    }
+
     public ConfigurationSection legacyConfigSection() {
-        return legacyView().config();
+        return legacy().config;
     }
 
     public ConfigurationSection legacySections() {
-        return legacyView().sections();
-    }
-
-    /** Atomic publication protects lazy reads; the returned Bukkit views still require serialized mutation. */
-    private LegacyView legacyView() {
-        LegacyView current = legacyView;
-        if (current == null) {
-            synchronized (this) {
-                current = legacyView;
-                if (current == null) {
-                    ConfigurationSection config = NiConfigViews.section(definition.definition());
-                    current = new LegacyView(config, config.getConfigurationSection("sections"));
-                    legacyView = current;
-                }
-            }
-        }
-        return current;
+        return legacy().sections;
     }
 
     @Override
@@ -153,106 +137,126 @@ public final class NiPaperRecipe implements ItemRecipe<ItemStack> {
     }
 
     public Generated createGenerated(GenerationContext context) {
-        LegacyView view = legacyView;
+        OfflinePlayer viewer = context.get(ItemContext.VIEWER);
+        LegacyView current = legacy;
         NiConfig sections =
-                view == null
+                current == null
                         ? definition.definition().section("sections")
-                        : view.sections() == null ? null : NiYaml.fromSection(view.sections());
+                        : current.sections == null ? null : NiYaml.fromSection(current.sections);
         NiEvaluation evaluation =
                 new NiEvaluation(
-                        context,
-                        sections,
-                        context.get(ItemContext.VIEWER),
-                        NiEvaluation.Mode.ACTION,
-                        nodes,
-                        scripts,
-                        host);
+                        context, sections, viewer, NiEvaluation.Mode.ACTION, nodes, scripts, host);
         NiConfig expanded = definition.expand(evaluation);
-        String materialName = expanded.string("material");
-        boolean external = ExternalItemMaterial.isExternal(materialName);
-        Material material = NiItemAppearance.material(materialName);
-        if (!external && material == null && !staticMaterial)
+        String requested = expanded.string("material");
+        String external = ExternalItemMaterial.isExternal(requested) ? requested : staticExternal;
+        NiItemAppearance appearance = selectAppearance(expanded, external != null);
+        if (appearance.material() == null && external == null && !hasStaticMaterial)
             throw new InvalidMaterialException(
-                    definition.id() + ": invalid material: " + expanded.string("material"));
-        boolean externalBase = external || staticExternal != null;
-        if (!externalBase && prototype.isEmpty())
+                    "Invalid material for " + definition.id() + ": " + requested);
+        net.minecraft.world.item.ItemStack item;
+        if (external != null) {
+            if (sources == null)
+                throw new InvalidMaterialException(
+                        "No external item source for " + definition.id() + ": " + external);
+            ItemStack supplied =
+                    sources.material(
+                            external, viewer == null ? null : viewer.getPlayer(), Map.of());
+            if (supplied == null)
+                throw new InvalidMaterialException(
+                        "Invalid external material for " + definition.id() + ": " + external);
+            item = CraftItemStack.asNMSCopy(supplied);
+            CompoundTag custom = custom(item);
+            custom.remove(ItemStateCodec.KEY);
+            if (!item.isEmpty()) {
+                item.set(DataComponents.CUSTOM_DATA, CustomData.of(custom));
+                item = new NiItemAppearance(fixed, warning, true).apply(item, false);
+                item.set(
+                        DataComponents.CUSTOM_DATA,
+                        CustomData.of(data.apply(custom(item), fixed, null, definitionHash)));
+            }
+            item = appearance.apply(item);
+        } else {
+            item = prototype.copy();
+            if (!item.isEmpty())
+                item.set(
+                        DataComponents.CUSTOM_DATA,
+                        CustomData.of(data.apply(custom(item), fixed, null, definitionHash)));
+            item = appearance.apply(item);
+            if (!item.isEmpty()) item.setCount(1);
+        }
+        if (item.isEmpty())
             return new Generated(
-                    CraftItemStack.asCraftMirror(prototype.copy()),
-                    expanded,
-                    this::legacySections,
-                    false);
-        var result =
-                externalBase
-                        ? externalAppearance(
-                                expanded, external ? materialName : staticExternal, context)
-                        : appearance(expanded);
-        if (result.isEmpty())
-            return new Generated(
-                    CraftItemStack.asCraftMirror(result), expanded, this::legacySections, false);
+                    CraftItemStack.asBukkitCopy(item), expanded, this::legacySections, false);
         CompoundTag custom =
                 data.applyGenerated(
-                        customData(result),
+                        custom(item),
                         expanded,
                         new ItemIdentity(definition.id(), context.savedRolls()),
                         definitionHash);
-        result.set(DataComponents.CUSTOM_DATA, CustomData.of(custom));
-        if (!externalBase) result.setCount(1);
+        item.set(DataComponents.CUSTOM_DATA, CustomData.of(custom));
+        // Native copies can share mutable components with the plan or the static prototype.
         return new Generated(
-                CraftItemStack.asCraftMirror(result), expanded, this::legacySections, true);
+                CraftItemStack.asBukkitCopy(ProofItemCopies.copy(item)),
+                expanded,
+                this::legacySections,
+                true);
     }
 
-    /** Provider values can depend on a viewer or a roll, even for a constant material string. */
-    private net.minecraft.world.item.ItemStack externalAppearance(
-            NiConfig expanded, String material, GenerationContext context) {
-        var viewer = context.get(ItemContext.VIEWER);
-        var result =
-                CraftItemStack.asNMSCopy(
-                        itemSources.material(
-                                material,
-                                viewer instanceof Player player ? player : null,
-                                Map.of()));
-        // This reserved envelope belongs to the new recipe, even if an external provider
-        // returned a previously generated ItemLoom item. Other custom data stays intact.
-        CompoundTag externalData = customData(result);
-        if (externalData.contains(dev.itemloom.paper.nms.ItemStateCodec.KEY)) {
-            externalData = externalData.copy();
-            externalData.remove(dev.itemloom.paper.nms.ItemStateCodec.KEY);
-            result.set(DataComponents.CUSTOM_DATA, CustomData.of(externalData));
-        }
-        // The selected external material takes precedence over a static vanilla material.
-        result = new NiItemAppearance(fixed, warning, true).apply(result, false);
-        if (fixed != null && !result.isEmpty()) {
-            result.set(
-                    DataComponents.CUSTOM_DATA,
-                    CustomData.of(data.apply(customData(result), fixed, null, definitionHash)));
-        }
-        return new NiItemAppearance(expanded, warning, true).apply(result);
-    }
-
-    /**
-     * Keep one prepared appearance only for the frontend's small repeated document. Node
-     * evaluation always precedes this cache; rolls, timestamps, options/NBT and generation
-     * events remain per request. Randomized or oversized expansions evict the old plan.
-     */
-    private net.minecraft.world.item.ItemStack appearance(NiConfig expanded) {
-        if (!definition.reusable(expanded)) {
+    /** Admit one appearance only after a repeated expansion; evaluation always precedes this call. */
+    private synchronized NiItemAppearance selectAppearance(NiConfig expanded, boolean external) {
+        StringBuilder encoded = new StringBuilder();
+        String key = appearanceKey(encoded, expanded.values()) ? encoded.toString() : null;
+        boolean repeated =
+                key != null && key.equals(previousAppearanceKey) && external == previousExternal;
+        if (!repeated) {
             appearance = null;
-            return new NiItemAppearance(expanded, warning).apply(prototype);
+            previousAppearanceKey = key;
+            previousExternal = external;
         }
-        Appearance cached = appearance;
-        if (cached == null || cached.config() != expanded) {
-            cached =
-                    new Appearance(
-                            expanded, new NiItemAppearance(expanded, warning).apply(prototype));
-            appearance = cached;
-        }
-        return cached.prototype().copy();
+        if (appearance != null) return appearance;
+        NiItemAppearance parsed = new NiItemAppearance(expanded, warning, external);
+        if (repeated) appearance = parsed;
+        return parsed;
     }
 
-    private static CompoundTag customData(net.minecraft.world.item.ItemStack item) {
-        CustomData data = item.get(DataComponents.CUSTOM_DATA);
-        // NiItemData always copies before applying options or overlays; this borrowed tree stays
-        // private.
-        return data == null ? new CompoundTag() : data.getUnsafe();
+    /** Length-prefixed scalar tokens preserve map order, scalar types and unambiguous boundaries. */
+    private static boolean appearanceKey(StringBuilder output, Object value) {
+        if (value == null) return keyToken(output, '0');
+        if (value instanceof String text) return keyScalar(output, 'S', text);
+        if (value instanceof Boolean flag) return keyToken(output, flag ? 'T' : 'F');
+        if (value instanceof Map<?, ?> map) {
+            if (!keyToken(output, '{')) return false;
+            for (var entry : map.entrySet()) {
+                if (!keyScalar(output, 'K', entry.getKey().toString())
+                        || !appearanceKey(output, entry.getValue())) return false;
+            }
+            return keyToken(output, '}');
+        }
+        if (value instanceof List<?> list) {
+            if (!keyToken(output, '[')) return false;
+            for (Object entry : list) if (!appearanceKey(output, entry)) return false;
+            return keyToken(output, ']');
+        }
+        return keyScalar(output, 'N', value.getClass().getName())
+                && keyScalar(output, 'V', value.toString());
+    }
+
+    private static boolean keyToken(StringBuilder output, char token) {
+        if (output.length() >= APPEARANCE_KEY_LIMIT) return false;
+        output.append(token);
+        return true;
+    }
+
+    private static boolean keyScalar(StringBuilder output, char token, String value) {
+        String length = Integer.toString(value.length());
+        if ((long) output.length() + value.length() + length.length() + 2 > APPEARANCE_KEY_LIMIT)
+            return false;
+        output.append(token).append(length).append(':').append(value);
+        return true;
+    }
+
+    private static CompoundTag custom(net.minecraft.world.item.ItemStack item) {
+        CustomData custom = item.get(DataComponents.CUSTOM_DATA);
+        return custom == null ? new CompoundTag() : custom.copyTag();
     }
 }

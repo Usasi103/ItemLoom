@@ -5,7 +5,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/** Script alias only; the packet path dispatches the same independent event on the main thread. */
 public final class LegacyItemPacketEvent extends ItemDisplayEvent {
     public LegacyItemPacketEvent(Player player, ItemStack itemStack) {
         super(player, itemStack, !Bukkit.isPrimaryThread());

@@ -1,5 +1,7 @@
 package dev.itemloom.probe;
 
+import dev.itemloom.paper.runtime.FormatRuntimeLoader;
+
 import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Instant;
@@ -825,8 +827,17 @@ final class ItemMaintenanceProbe {
                 state.close();
                 throw error;
             }
-            maintenance = new ItemMaintenance(catalog, plugin, clock);
-            listeners = new ItemListeners(catalog::triggers, () -> maintenance, plugin.getLogger());
+            maintenance =
+                    new ItemMaintenance(
+                            FormatRuntimeLoader.maintenance(catalog),
+                            FormatRuntimeLoader.durability(catalog),
+                            plugin,
+                            clock);
+            listeners =
+                    new ItemListeners(
+                            () -> catalog.active() ? catalog.triggers() : null,
+                            () -> maintenance.active() ? maintenance : null,
+                            plugin.getLogger());
             Bukkit.getPluginManager()
                     .registerEvent(
                             LegacyItemUpdateEvent.PreGenerate.class,

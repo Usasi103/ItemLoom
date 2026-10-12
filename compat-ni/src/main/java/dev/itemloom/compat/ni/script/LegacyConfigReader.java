@@ -1,15 +1,9 @@
 package dev.itemloom.compat.ni.script;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiYaml;
+import dev.itemloom.compat.ni.*;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
 
-/** Script reader adapters retain live handles; compiled engine configurations remain detached. */
 public abstract class LegacyConfigReader {
     public abstract Object getHandle();
 
@@ -33,7 +27,7 @@ public abstract class LegacyConfigReader {
     }
 
     public boolean containsKey(String key) {
-        return view().contains(key);
+        return get(key) != null;
     }
 
     public Object get(String key) {
@@ -60,11 +54,10 @@ public abstract class LegacyConfigReader {
 
     public int getInt(String key, int fallback) {
         Object value = get(key);
-        return value instanceof Number n
-                ? n.intValue()
-                : this instanceof MapReader && value != null
-                        ? Integer.parseInt(value.toString())
-                        : fallback;
+        if (value instanceof Number number) return number.intValue();
+        return this instanceof MapReader && value != null
+                ? Integer.parseInt(value.toString())
+                : fallback;
     }
 
     public long getLong(String key) {
@@ -73,11 +66,10 @@ public abstract class LegacyConfigReader {
 
     public long getLong(String key, long fallback) {
         Object value = get(key);
-        return value instanceof Number n
-                ? n.longValue()
-                : this instanceof MapReader && value != null
-                        ? Long.parseLong(value.toString())
-                        : fallback;
+        if (value instanceof Number number) return number.longValue();
+        return this instanceof MapReader && value != null
+                ? Long.parseLong(value.toString())
+                : fallback;
     }
 
     public double getDouble(String key) {
@@ -86,11 +78,10 @@ public abstract class LegacyConfigReader {
 
     public double getDouble(String key, double fallback) {
         Object value = get(key);
-        return value instanceof Number n
-                ? n.doubleValue()
-                : this instanceof MapReader && value != null
-                        ? Double.parseDouble(value.toString())
-                        : fallback;
+        if (value instanceof Number number) return number.doubleValue();
+        return this instanceof MapReader && value != null
+                ? Double.parseDouble(value.toString())
+                : fallback;
     }
 
     public boolean getBoolean(String key) {
@@ -99,17 +90,16 @@ public abstract class LegacyConfigReader {
 
     public boolean getBoolean(String key, boolean fallback) {
         Object value = get(key);
-        return value instanceof Boolean b
-                ? b
-                : this instanceof MapReader && value != null
-                        ? Boolean.parseBoolean(value.toString())
-                        : fallback;
+        if (value instanceof Boolean bool) return bool;
+        return this instanceof MapReader && value != null
+                ? Boolean.parseBoolean(value.toString())
+                : fallback;
     }
 
     public List<String> getStringList(String key) {
         List<String> result = new ArrayList<>();
-        if (get(key) instanceof List<?> values)
-            for (Object value : values) {
+        if (get(key) instanceof List<?> list)
+            for (Object value : list) {
                 if (value != null
                         && (this instanceof MapReader
                                 || value instanceof String
@@ -122,8 +112,8 @@ public abstract class LegacyConfigReader {
 
     public List<Map<?, ?>> getMapList(String key) {
         List<Map<?, ?>> result = new ArrayList<>();
-        if (get(key) instanceof List<?> values)
-            for (Object value : values) if (value instanceof Map<?, ?> map) result.add(map);
+        if (get(key) instanceof List<?> list)
+            for (Object value : list) if (value instanceof Map<?, ?> map) result.add(map);
         return result;
     }
 
@@ -135,7 +125,7 @@ public abstract class LegacyConfigReader {
         private final ConfigurationSection handle;
 
         public BukkitReader(ConfigurationSection handle) {
-            this.handle = java.util.Objects.requireNonNull(handle);
+            this.handle = Objects.requireNonNull(handle);
         }
 
         @Override
@@ -165,8 +155,8 @@ public abstract class LegacyConfigReader {
 
         @Override
         public LegacyConfigReader getConfig(String key) {
-            ConfigurationSection child = handle.getConfigurationSection(key);
-            return child == null ? null : new BukkitReader(child);
+            ConfigurationSection section = handle.getConfigurationSection(key);
+            return section == null ? null : new BukkitReader(section);
         }
     }
 
@@ -199,19 +189,17 @@ public abstract class LegacyConfigReader {
 
         @Override
         public Object get(String path) {
-            if (path.indexOf('.') < 0 && path.indexOf('\\') < 0) return handle.get(path);
             Object value = handle;
-            for (String key : dev.itemloom.compat.ni.NiTemplate.split(path, '.', 0)) {
+            for (String part : NiTemplate.split(path, '.', 0)) {
                 if (!(value instanceof Map<?, ?> map)) return null;
-                value = map.get(key);
+                value = map.get(part);
             }
             return value;
         }
 
         @Override
         public LegacyConfigReader getConfig(String key) {
-            Object value = get(key);
-            return value instanceof Map<?, ?> map ? new MapReader(map) : null;
+            return get(key) instanceof Map<?, ?> map ? new MapReader(map) : null;
         }
     }
 }

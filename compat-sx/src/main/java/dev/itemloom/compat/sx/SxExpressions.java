@@ -1,21 +1,27 @@
 package dev.itemloom.compat.sx;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
 import java.util.random.RandomGenerator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.script.Bindings;
 
-/** Request-local implementation of SX 4.5.11's expression language, without SX classes. */
+/** A request-local evaluator; recursion shares one bounded work account. */
 public final class SxExpressions {
     public static final String DELETE = "<DeleteLore>";
-    private static final int MAX_DEPTH = 64, MAX_STEPS = 8192, MAX_TEXT = 1_048_576;
-    private static final java.util.regex.Pattern COMPARE =
-            java.util.regex.Pattern.compile(" (eq|ne|gt|lt|ge|le) ");
+    private static final int MAX_TEXT = 1_048_576;
+    private static final Pattern COMPARISON = Pattern.compile(" (eq|ne|gt|lt|ge|le) ");
 
     @FunctionalInterface
     public interface ScriptCall {
@@ -23,15 +29,18 @@ public final class SxExpressions {
     }
 
     private final Object player;
-    private final Map<String, SxRandom> local, global;
-    private final Map<String, String> locks = new LinkedHashMap<>(), other = new LinkedHashMap<>();
+    private final Map<String, SxRandom> local;
+    private final Map<String, SxRandom> global;
+    private final Map<String, String> other;
+    private final Map<String, String> locks = new LinkedHashMap<>();
     private final RandomGenerator rng;
     private final UnaryOperator<String> placeholders;
     private final ScriptCall scripts;
-    private final double precision;
-    private final String timeFormat;
     private final Clock clock;
-    private int depth, steps;
+    private final int precision;
+    private final String timeFormat;
+    private int depth;
+    private int work;
 
     public SxExpressions(
             Object player,
@@ -46,16 +55,17 @@ public final class SxExpressions {
         this.player = player;
         this.local = local;
         this.global = global;
+        this.other = new LinkedHashMap<>(parameters);
         this.rng = rng;
-        other.putAll(parameters);
         this.placeholders = placeholders;
         this.scripts = scripts;
         this.clock = clock;
-        int digits = Integer.parseInt(settings.text("DecimalPrecision", "2"));
-        if (digits < 0 || digits > 12)
-            throw new IllegalArgumentException("SX DecimalPrecision must be 0..12");
-        precision = Math.pow(10, digits);
+        precision = Integer.parseInt(settings.text("DecimalPrecision", "2"));
+        if (precision < 0 || precision > 12) {
+            throw new IllegalArgumentException("DecimalPrecision must be in 0..12");
+        }
         timeFormat = settings.text("TimeFormat", "yyyy/MM/dd HH:mm");
+        new SimpleDateFormat(timeFormat);
     }
 
     public Object getPlayer() {
@@ -76,117 +86,159 @@ public final class SxExpressions {
 
     public String random(String key) {
         String value = other.get(key);
-        if (value == null && local.containsKey(key)) value = local.get(key).pick(rng);
-        if (value == null && global.containsKey(key)) value = global.get(key).pick(rng);
+        if (value == null && local.containsKey(key)) {
+            value = local.get(key).pick(rng);
+        }
+        if (value == null && global.containsKey(key)) {
+            value = global.get(key).pick(rng);
+        }
         return value;
     }
 
     public String replace(String source) {
-        if (source == null) return null;
-        if (++depth > MAX_DEPTH) {
+        if (source == null) {
+            return null;
+        }
+        if (depth == 0) {
+            work = 0;
+        }
+        if (++depth > 64) {
             depth--;
-            throw new IllegalArgumentException("SX expression cycle or nesting over " + MAX_DEPTH);
+            throw new IllegalArgumentException("SX expression nesting exceeds 64");
         }
         try {
-            if (source.length() > MAX_TEXT)
-                throw new IllegalArgumentException("SX expression text is too large");
-            StringBuilder result = new StringBuilder();
-            for (int i = 0; i < source.length(); ) {
-                if (++steps > MAX_STEPS)
-                    throw new IllegalArgumentException("SX expression work limit exceeded");
-                char ch = source.charAt(i);
-                if (ch == '$' && i + 1 < source.length() && source.charAt(i + 1) == '<') {
-                    result.append('<');
-                    i += 2;
-                    continue;
-                }
-                if (ch != '<') {
-                    result.append(ch);
-                    i++;
-                    continue;
-                }
-                int end = closing(source, i);
-                if (end < 0) {
-                    result.append(source.substring(i));
+            length(source);
+            StringBuilder output = new StringBuilder();
+            int index = 0;
+            while (index < source.length()) {
+                step();
+                int open = source.indexOf('<', index);
+                if (open < 0) {
+                    output.append(source, index, source.length());
                     break;
                 }
-                String raw = source.substring(i + 1, end);
-                String key = replace(raw);
-                int separator = key.indexOf(':');
-                if (separator < 0) result.append('<').append(key).append('>');
-                else {
-                    String kind = key.substring(0, separator),
-                            argument = key.substring(separator + 1);
-                    String value = expression(kind, argument);
-                    result.append(
-                            value == null ? DELETE : (kind.equals("l") ? value : replace(value)));
+                if (open > index && source.charAt(open - 1) == '$') {
+                    output.append(source, index, open - 1).append('<');
+                    index = open + 1;
+                    continue;
                 }
-                if (result.length() > MAX_TEXT)
-                    throw new IllegalArgumentException("SX expanded text is too large");
-                i = end + 1;
+                output.append(source, index, open);
+                int close = closing(source, open);
+                if (close < 0) {
+                    output.append(source, open, source.length());
+                    break;
+                }
+                String body = source.substring(open + 1, close);
+                if (!body.contains(":")) {
+                    output.append('<').append(body).append('>');
+                } else {
+                    String expanded = replace(body);
+                    int colon = expanded.indexOf(':');
+                    if (colon < 0) {
+                        output.append('<').append(expanded).append('>');
+                    } else {
+                        String kind = expanded.substring(0, colon);
+                        String result = evaluate(kind, expanded.substring(colon + 1));
+                        output.append(
+                                result == null
+                                        ? DELETE
+                                        : kind.equals("l") ? result : replace(result));
+                    }
+                }
+                length(output);
+                index = close + 1;
             }
-            return placeholders.apply(result.toString());
+            length(output);
+            String result = placeholders.apply(output.toString());
+            if (result != null) {
+                length(result);
+            }
+            return result;
         } finally {
             depth--;
         }
     }
 
-    private static int closing(String source, int start) {
-        int level = 1;
-        for (int i = start + 1; i < source.length(); i++) {
-            char ch = source.charAt(i);
-            if (ch == '<') level++;
-            else if (ch == '>' && --level == 0) return i;
+    private int closing(String source, int open) {
+        int nested = 1;
+        for (int index = open + 1; index < source.length(); index++) {
+            char token = source.charAt(index);
+            if (token == '<') {
+                if (++nested + depth > 65) {
+                    throw new IllegalArgumentException("SX expression nesting exceeds 64");
+                }
+                step();
+            } else if (token == '>') {
+                step();
+                if (--nested == 0) {
+                    return index;
+                }
+            }
         }
         return -1;
+    }
+
+    private void step() {
+        if (++work > 8192) {
+            throw new IllegalArgumentException("SX expression work exceeds 8192 steps");
+        }
+    }
+
+    private static void length(CharSequence text) {
+        if (text.length() > MAX_TEXT) {
+            throw new IllegalArgumentException("SX expression exceeds maximum text length");
+        }
     }
 
     public List<String> replace(List<String> source) {
         List<String> result = new ArrayList<>();
         for (String line : source) {
-            String value = replace(line);
-            if (value == null) continue;
-            // SX splits multiline random groups into independent Lore/enchantment entries.
-            for (String part : value.split("\n")) if (!part.contains(DELETE)) result.add(part);
+            String expanded = replace(line);
+            if (expanded != null) {
+                for (String part : expanded.split("\n")) {
+                    if (!part.contains(DELETE)) {
+                        result.add(part);
+                    }
+                }
+            }
         }
         return result;
     }
 
     public Object replace(Object value) {
-        if (value instanceof String text) return SxValueRules.scalar(replace(text));
+        if (value instanceof String text) {
+            return SxValueRules.scalar(replace(text));
+        }
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();
-            map.forEach((key, v) -> result.put(key.toString(), replace(v)));
+            map.forEach((key, child) -> result.put(String.valueOf(key), replace(child)));
             return result;
         }
-        if (value instanceof List<?> list) return list.stream().map(this::replace).toList();
+        if (value instanceof List<?> list) {
+            List<Object> result = new ArrayList<>();
+            list.forEach(child -> result.add(replace(child)));
+            return result;
+        }
         return value;
     }
 
-    private String expression(String kind, String argument) {
+    private String evaluate(String kind, String argument) {
         return switch (kind) {
-            case "s" -> argument.contains(":") ? choose(argument) : random(argument);
+            case "s" -> argument.contains(":") ? choice(argument) : random(argument);
             case "l" ->
                     SxValueRules.locked(
                             argument, locks, other, this::random, rng::nextInt, this::replace);
             case "i", "r" -> integer(argument);
             case "d" -> decimal(argument);
-            case "b" -> matches(argument);
-            case "c" -> {
-                boolean integer = argument.startsWith("int");
-                double number = SxMath.evaluate(integer ? argument.substring(3) : argument);
-                yield integer ? Long.toString(Math.round(number)) : format(number);
-            }
+            case "b" -> filter(argument);
+            case "c" ->
+                    argument.startsWith("int")
+                            ? Long.toString(Math.round(SxMath.evaluate(argument.substring(3))))
+                            : rounded(SxMath.evaluate(argument));
             case "max", "min" -> extreme(argument, kind.equals("max"));
-            case "eq", "like" -> {
-                int split = argument.indexOf("==");
-                if (split < 0) yield "false";
-                String a = argument.substring(0, split), b = argument.substring(split + 2);
-                yield Boolean.toString(
-                        kind.equals("eq") ? a.equals(b) : a.contains(b) || b.contains(a));
-            }
+            case "eq", "like" -> equality(argument, kind.equals("like"));
             case "cmp" -> compare(argument);
-            case "if" -> conditional(argument);
+            case "if" -> condition(argument);
             case "when" -> SxBranchTime.branch(argument);
             case "null" -> "";
             case "u" ->
@@ -197,105 +249,135 @@ public final class SxExpressions {
                             .toString();
             case "t" -> SxBranchTime.time(argument, timeFormat, clock);
             case "j" -> script(argument);
-            default ->
-                    throw new IllegalArgumentException("Unsupported SX expression type: " + kind);
+            default -> throw new IllegalArgumentException("Unknown SX expression: " + kind);
         };
     }
 
-    private String choose(String text) {
-        String[] choices = text.split(":", -1);
-        return choices[rng.nextInt(choices.length)];
+    private String choice(String choices) {
+        String[] values = choices.split(":", -1);
+        return values[rng.nextInt(values.length)];
     }
 
-    private String integer(String text) {
-        int split = text.indexOf('_');
-        if (split < 0) return text;
-        int a = Integer.parseInt(text.substring(0, split)),
-                b = Integer.parseInt(text.substring(split + 1));
+    private String integer(String argument) {
+        int split = argument.indexOf('_');
+        if (split < 0) {
+            return argument;
+        }
+        int a = Integer.parseInt(argument.substring(0, split));
+        int b = Integer.parseInt(argument.substring(split + 1));
         return Long.toString(rng.nextLong(Math.min(a, b), (long) Math.max(a, b) + 1));
     }
 
-    private String decimal(String text) {
-        int split = text.indexOf('_');
-        if (split < 0) return text;
-        double a = Double.parseDouble(text.substring(0, split)),
-                b = Double.parseDouble(text.substring(split + 1));
-        return format(a + rng.nextDouble() * (b - a));
+    private String decimal(String argument) {
+        int split = argument.indexOf('_');
+        if (split < 0) {
+            return argument;
+        }
+        double a = Double.parseDouble(argument.substring(0, split));
+        double b = Double.parseDouble(argument.substring(split + 1));
+        return rounded(a + rng.nextDouble() * (b - a));
     }
 
-    private String format(double number) {
-        if (!Double.isFinite(number))
-            throw new IllegalArgumentException("Non-finite SX numeric result");
-        return Double.toString(Math.round(number * precision) / precision);
+    private String rounded(double value) {
+        if (!Double.isFinite(value)) {
+            throw new IllegalArgumentException("Non-finite SX decimal result");
+        }
+        return Double.toString(
+                BigDecimal.valueOf(value).setScale(precision, RoundingMode.HALF_UP).doubleValue());
     }
 
-    private String matches(String text) {
-        int split = text.indexOf('#'), colon = text.indexOf(':');
-        if (split < 0 || colon >= 0 && colon < split) split = colon;
-        if (split <= 0) return null;
-        String match = text.substring(0, split);
-        for (String option : text.substring(split + 1).split(":", -1))
-            if (match.equals(option)) return "";
+    private static String filter(String input) {
+        int hash = input.indexOf('#');
+        int colon = input.indexOf(':');
+        int split = hash < 0 ? colon : colon < 0 ? hash : Math.min(hash, colon);
+        if (split <= 0) {
+            return null;
+        }
+        String wanted = input.substring(0, split);
+        for (String choice : input.substring(split + 1).split(":", -1)) {
+            if (choice.equals(wanted)) {
+                return "";
+            }
+        }
         return null;
     }
 
-    private String extreme(String text, boolean max) {
-        String selected = null;
-        double best = max ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
-        for (String part : text.split(":")) {
-            double value = Double.parseDouble(part);
-            if (selected == null || (max ? value > best : value < best)) {
-                selected = part;
-                best = value;
+    private static String extreme(String input, boolean maximum) {
+        String best = null;
+        double value = 0;
+        for (String candidate : input.split(":", -1)) {
+            double parsed = Double.parseDouble(candidate);
+            if (best == null || (maximum ? parsed > value : parsed < value)) {
+                best = candidate;
+                value = parsed;
             }
         }
-        return selected;
+        return best;
     }
 
-    private static String compare(String text) {
-        var matcher = COMPARE.matcher(text);
-        if (!matcher.find()) return "false";
-        String a = text.substring(0, matcher.start()).trim(),
-                b = text.substring(matcher.end()).trim();
-        int compare;
+    private static String equality(String input, boolean contains) {
+        int split = input.indexOf("==");
+        if (split < 0) {
+            return "false";
+        }
+        String a = input.substring(0, split);
+        String b = input.substring(split + 2);
+        return Boolean.toString(contains ? a.contains(b) || b.contains(a) : a.equals(b));
+    }
+
+    private static String compare(String input) {
+        Matcher match = COMPARISON.matcher(input);
+        if (!match.find()) {
+            return "false";
+        }
+        String a = input.substring(0, match.start()).trim();
+        String b = input.substring(match.end()).trim();
+        int comparison;
         try {
-            compare = Double.compare(Double.parseDouble(a), Double.parseDouble(b));
+            comparison = Double.compare(Double.parseDouble(a), Double.parseDouble(b));
         } catch (NumberFormatException ignored) {
-            compare = a.compareTo(b);
+            comparison = a.compareTo(b);
         }
         return Boolean.toString(
-                switch (matcher.group(1)) {
-                    case "eq" -> compare == 0;
-                    case "ne" -> compare != 0;
-                    case "gt" -> compare > 0;
-                    case "lt" -> compare < 0;
-                    case "ge" -> compare >= 0;
-                    default -> compare <= 0;
+                switch (match.group(1)) {
+                    case "eq" -> comparison == 0;
+                    case "ne" -> comparison != 0;
+                    case "gt" -> comparison > 0;
+                    case "lt" -> comparison < 0;
+                    case "ge" -> comparison >= 0;
+                    case "le" -> comparison <= 0;
+                    default -> false;
                 });
     }
 
-    private static String conditional(String text) {
-        int question = text.indexOf('?'), colon = text.indexOf(':', question + 1);
-        if (question < 0 || colon < 0) return "";
-        boolean condition =
-                List.of("true", "1", "yes", "ok").contains(text.substring(0, question).trim());
-        return condition ? text.substring(question + 1, colon) : text.substring(colon + 1);
+    private static String condition(String input) {
+        int question = input.indexOf('?');
+        int colon = question < 0 ? -1 : input.indexOf(':', question + 1);
+        if (colon < 0) {
+            return "";
+        }
+        String condition = input.substring(0, question).trim();
+        return switch (condition) {
+            case "true", "1", "yes", "ok" -> input.substring(question + 1, colon);
+            default -> input.substring(colon + 1);
+        };
     }
 
-    private String script(String text) {
-        int dot = text.indexOf('.');
-        if (dot < 1) throw new IllegalArgumentException("SX script must be File.function: " + text);
-        int hash = text.indexOf('#', dot);
-        Object result =
-                scripts.call(
-                        text.substring(0, dot),
-                        text.substring(dot + 1, hash < 0 ? text.length() : hash),
-                        this,
-                        hash < 0 ? null : text.substring(hash + 1).split(","));
-        if (result == null) return null;
-        if (result instanceof javax.script.Bindings bindings) result = bindings.values();
-        if (result instanceof java.util.Collection<?> list)
-            return String.join("\n", list.stream().map(String::valueOf).toList());
-        return result.toString();
+    private String script(String input) {
+        int dot = input.indexOf('.');
+        if (dot <= 0) {
+            throw new IllegalArgumentException("Script expression needs file.function");
+        }
+        int hash = input.indexOf('#', dot + 1);
+        String function = input.substring(dot + 1, hash < 0 ? input.length() : hash);
+        String[] arguments = hash < 0 ? null : input.substring(hash + 1).split(",");
+        Object value = scripts.call(input.substring(0, dot), function, this, arguments);
+        Collection<?> lines =
+                value instanceof Bindings bindings
+                        ? bindings.values()
+                        : value instanceof Collection<?> collection ? collection : null;
+        return lines == null
+                ? value == null ? null : value.toString()
+                : String.join("\n", lines.stream().map(String::valueOf).toList());
     }
 }

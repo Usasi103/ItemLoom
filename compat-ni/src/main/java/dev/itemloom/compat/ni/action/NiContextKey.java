@@ -1,19 +1,17 @@
 package dev.itemloom.compat.ni.action;
 
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
 
-/** Identity keys preserve script context aliases without exposing NI types to the core. */
 public final class NiContextKey<T> {
     private final boolean putInGlobal;
-    private final Collection<String> names;
+    private final List<String> names;
 
     public NiContextKey(String... names) {
         this(false, names);
     }
 
     public NiContextKey(boolean putInGlobal, String... names) {
-        this(putInGlobal, List.of(names));
+        this(putInGlobal, Arrays.asList(names));
     }
 
     public NiContextKey(boolean putInGlobal, Collection<String> names) {

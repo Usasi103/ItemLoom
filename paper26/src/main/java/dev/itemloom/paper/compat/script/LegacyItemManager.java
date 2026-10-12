@@ -1,25 +1,18 @@
 package dev.itemloom.paper.compat.script;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
-import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import com.google.gson.*;
 import dev.itemloom.compat.ni.NiYaml;
-import dev.itemloom.paper.compat.NiItemNodes;
-import dev.itemloom.paper.compat.NiItemOperations;
-import dev.itemloom.paper.compat.NiItemFiles;
+import dev.itemloom.paper.compat.*;
+import java.io.File;
+import java.util.*;
+import jdk.dynalink.beans.StaticClass;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.java.JavaPlugin;
 
-/** Script-only manager facade owned by one catalog revision; no NI classes are loaded. */
 public final class LegacyItemManager {
     public enum SaveResult {
         SUCCESS,
@@ -27,8 +20,7 @@ public final class LegacyItemManager {
         CONFLICT
     }
 
-    public final jdk.dynalink.beans.StaticClass SaveResult =
-            jdk.dynalink.beans.StaticClass.forClass(SaveResult.class);
+    public final StaticClass SaveResult = StaticClass.forClass(LegacyItemManager.SaveResult.class);
     public final LegacyItemManager INSTANCE = this;
     private final NiItemOperations operations;
 
@@ -36,7 +28,7 @@ public final class LegacyItemManager {
         this.operations = Objects.requireNonNull(operations);
     }
 
-    public org.bukkit.plugin.java.JavaPlugin getPlugin() {
+    public JavaPlugin getPlugin() {
         operations.ensureActive();
         return operations.catalog().plugin();
     }
@@ -71,7 +63,6 @@ public final class LegacyItemManager {
         return NiItemFiles.save(operations, item, id, file, config, cover);
     }
 
-    /** Live registry; mutations are independent of the original-configuration registry. */
     public Map<String, LegacyItemGenerator> getItems() {
         return operations.catalog().registry().generators();
     }
@@ -80,18 +71,18 @@ public final class LegacyItemManager {
         return operations.catalog().registry().configs();
     }
 
-    public ArrayList<String> getItemIds() {
-        ArrayList<String> result = getItemIdsRaw();
-        Collections.sort(result);
-        return result;
-    }
-
     public ArrayList<String> getItemIdsRaw() {
         return new ArrayList<>(getItemConfigs().keySet());
     }
 
+    public ArrayList<String> getItemIds() {
+        ArrayList<String> ids = getItemIdsRaw();
+        ids.sort(String::compareTo);
+        return ids;
+    }
+
     public int getItemAmount() {
-        return getItemIdsRaw().size();
+        return getItemConfigs().size();
     }
 
     public boolean hasItem(String id) {
@@ -103,14 +94,13 @@ public final class LegacyItemManager {
     }
 
     public ConfigurationSection getOriginConfig(String id) {
-        ConfigurationSection origin = getRealOriginConfig(id);
-        return origin == null ? null : NiYaml.toSection(NiYaml.fromSection(origin));
+        ConfigurationSection original = getRealOriginConfig(id);
+        return original == null ? null : NiYaml.toSection(NiYaml.fromSection(original));
     }
 
-    /** Stable script mirror; editing this view does not change the compiled recipe or input files. */
     public ConfigurationSection getRealOriginConfig(String id) {
-        LegacyItemConfig origin = getItemConfigs().get(id);
-        return origin == null ? null : origin.getConfigSection();
+        LegacyItemConfig original = getItemConfigs().get(id);
+        return original == null ? null : original.getConfigSection();
     }
 
     public ItemStack getItemStack(String id) {
@@ -146,7 +136,7 @@ public final class LegacyItemManager {
     public LegacyItemInfo isNiItem(ItemStack item, boolean parseData) {
         operations.ensureActive();
         LegacyItemInfo result = LegacyItemInfo.inspect(item);
-        if (parseData && result != null) result.getData();
+        if (result != null && parseData) result.getData();
         return result;
     }
 
@@ -238,23 +228,23 @@ public final class LegacyItemManager {
     }
 
     static Map<String, String> parseData(String source) {
-        Map<String, String> result = new HashMap<>();
+        HashMap<String, String> result = new HashMap<>();
         if (source == null || source.isBlank()) return result;
-        JsonElement parsed = JsonParser.parseString(source);
-        if (parsed.isJsonNull()) return result;
-        if (!parsed.isJsonObject())
+        JsonElement root = JsonParser.parseString(source);
+        if (root.isJsonNull()) return result;
+        if (!root.isJsonObject())
             throw new IllegalArgumentException("Item data must be a JSON object");
-        parsed.getAsJsonObject()
+        root.getAsJsonObject()
                 .entrySet()
                 .forEach(
                         entry -> {
                             JsonElement value = entry.getValue();
-                            if (value.isJsonNull()) result.put(entry.getKey(), null);
-                            else if (value.isJsonPrimitive())
-                                result.put(entry.getKey(), value.getAsString());
-                            else
+                            if (!value.isJsonNull() && !value.isJsonPrimitive())
                                 throw new IllegalArgumentException(
                                         "Item data must contain scalar values: " + entry.getKey());
+                            result.put(
+                                    entry.getKey(),
+                                    value.isJsonNull() ? null : value.getAsString());
                         });
         return result;
     }

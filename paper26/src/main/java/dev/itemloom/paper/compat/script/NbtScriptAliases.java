@@ -1,43 +1,39 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.Map;
-import jdk.dynalink.beans.StaticClass;
 import dev.itemloom.compat.ni.script.LegacyScriptBindings;
 import dev.itemloom.paper.compat.nbt.LegacyNbt;
 import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
 import dev.itemloom.paper.compat.nbt.LegacyNbtUtils;
+import jdk.dynalink.beans.StaticClass;
 
-/** Only maps script imports; it does not install old-package classes in the JVM. */
+/** Resolves supported legacy script names without defining classes in the old namespace. */
 public final class NbtScriptAliases {
+    private static final String PREFIX = "pers.neige.neigeitems.libs.bot.inker.bukkit.nbt.";
+
     private NbtScriptAliases() {}
 
     public static void install(LegacyScriptBindings bindings) {
-        Map<String, Class<?>> types =
-                Map.ofEntries(
-                        Map.entry("Nbt", LegacyNbt.class),
-                                Map.entry("NbtCompound", LegacyNbt.Compound.class),
-                        Map.entry("NbtList", LegacyNbt.ListValue.class),
-                                Map.entry("NbtNumeric", LegacyNbt.Numeric.class),
-                        Map.entry("NbtByte", LegacyNbt.ByteValue.class),
-                                Map.entry("NbtShort", LegacyNbt.ShortValue.class),
-                        Map.entry("NbtInt", LegacyNbt.IntValue.class),
-                                Map.entry("NbtLong", LegacyNbt.LongValue.class),
-                        Map.entry("NbtFloat", LegacyNbt.FloatValue.class),
-                                Map.entry("NbtDouble", LegacyNbt.DoubleValue.class),
-                        Map.entry("NbtString", LegacyNbt.StringValue.class),
-                                Map.entry("NbtByteArray", LegacyNbt.ByteArray.class),
-                        Map.entry("NbtIntArray", LegacyNbt.IntArray.class),
-                                Map.entry("NbtLongArray", LegacyNbt.LongArray.class),
-                        Map.entry("NbtEnd", LegacyNbt.End.class),
-                                Map.entry("NbtType", LegacyNbt.Type.class),
-                        Map.entry("Nbt$Unsafe", LegacyNbt.Unsafe.class),
-                                Map.entry("NbtCompound$Unsafe", LegacyNbt.Compound.Unsafe.class),
-                        Map.entry("NbtItemStack", LegacyNbtItemStack.class),
-                                Map.entry("NbtUtils", LegacyNbtUtils.class));
-        types.forEach(
-                (name, type) ->
-                        bindings.alias(
-                                "pers.neige.neigeitems.libs.bot.inker.bukkit.nbt." + name,
-                                StaticClass.forClass(type)));
+        bindings.alias(PREFIX + "Nbt", StaticClass.forClass(LegacyNbt.class));
+        bindings.alias(PREFIX + "NbtCompound", StaticClass.forClass(LegacyNbt.Compound.class));
+        bindings.alias(PREFIX + "NbtList", StaticClass.forClass(LegacyNbt.ListValue.class));
+        bindings.alias(PREFIX + "NbtNumeric", StaticClass.forClass(LegacyNbt.Numeric.class));
+        bindings.alias(PREFIX + "NbtByte", StaticClass.forClass(LegacyNbt.ByteValue.class));
+        bindings.alias(PREFIX + "NbtShort", StaticClass.forClass(LegacyNbt.ShortValue.class));
+        bindings.alias(PREFIX + "NbtInt", StaticClass.forClass(LegacyNbt.IntValue.class));
+        bindings.alias(PREFIX + "NbtLong", StaticClass.forClass(LegacyNbt.LongValue.class));
+        bindings.alias(PREFIX + "NbtFloat", StaticClass.forClass(LegacyNbt.FloatValue.class));
+        bindings.alias(PREFIX + "NbtDouble", StaticClass.forClass(LegacyNbt.DoubleValue.class));
+        bindings.alias(PREFIX + "NbtString", StaticClass.forClass(LegacyNbt.StringValue.class));
+        bindings.alias(PREFIX + "NbtByteArray", StaticClass.forClass(LegacyNbt.ByteArray.class));
+        bindings.alias(PREFIX + "NbtIntArray", StaticClass.forClass(LegacyNbt.IntArray.class));
+        bindings.alias(PREFIX + "NbtLongArray", StaticClass.forClass(LegacyNbt.LongArray.class));
+        bindings.alias(PREFIX + "NbtEnd", StaticClass.forClass(LegacyNbt.End.class));
+        bindings.alias(PREFIX + "NbtType", StaticClass.forClass(LegacyNbt.Type.class));
+        bindings.alias(PREFIX + "Nbt$Unsafe", StaticClass.forClass(LegacyNbt.Unsafe.class));
+        bindings.alias(
+                PREFIX + "NbtCompound$Unsafe",
+                StaticClass.forClass(LegacyNbt.Compound.Unsafe.class));
+        bindings.alias(PREFIX + "NbtItemStack", StaticClass.forClass(LegacyNbtItemStack.class));
+        bindings.alias(PREFIX + "NbtUtils", StaticClass.forClass(LegacyNbtUtils.class));
     }
 }

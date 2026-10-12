@@ -1,87 +1,76 @@
 package dev.itemloom.compat.ni;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
-/** NI generation performs serialize -> expand text -> parse YAML; keep this at the language boundary. */
 public final class NiYaml {
     private NiYaml() {}
 
     public static NiConfig read(String text, String source) {
-        YamlConfiguration yaml = new YamlConfiguration();
         try {
+            YamlConfiguration yaml = new YamlConfiguration();
             yaml.loadFromString(text);
-        } catch (InvalidConfigurationException error) {
+            return fromSection(yaml);
+        } catch (Exception error) {
             throw new IllegalArgumentException(source + ": " + error.getMessage(), error);
         }
-        return new NiConfig(detach(yaml));
     }
 
     public static String write(NiConfig config) {
         return toSection(config).saveToString();
     }
 
-    /** Expanded generation YAML uses NI's map reader, whose scalar coercion differs from Bukkit. */
     public static NiConfig readGenerated(String text, String source) {
         try {
-            Object parsed =
-                    new org.yaml.snakeyaml.Yaml(
-                                    new org.yaml.snakeyaml.constructor.SafeConstructor(
-                                            new org.yaml.snakeyaml.LoaderOptions()))
-                            .load(text);
-            if (parsed == null) return new NiConfig(Map.of(), true);
+            Object parsed = new Yaml(new SafeConstructor(new LoaderOptions())).load(text);
+            if (parsed == null) return NiConfig.mapReader(Map.of());
             if (!(parsed instanceof Map<?, ?> map))
                 throw new IllegalArgumentException("Expected a YAML object");
-            Map<String, Object> result = new LinkedHashMap<>();
-            map.forEach((key, value) -> result.put(String.valueOf(key), value));
-            return new NiConfig(result, true);
+            Map<String, Object> values = new LinkedHashMap<>();
+            map.forEach((key, value) -> values.put(String.valueOf(key), value));
+            return NiConfig.mapReader(values);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException(source + ": " + error.getMessage(), error);
         }
     }
 
     public static YamlConfiguration toSection(NiConfig config) {
-        YamlConfiguration yaml = new YamlConfiguration();
-        fill(yaml, config.values());
-        return yaml;
-    }
-
-    public static NiConfig fromSection(ConfigurationSection config) {
-        return new NiConfig(detach(config));
-    }
-
-    private static Map<String, Object> detach(ConfigurationSection section) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (String key : section.getKeys(false)) result.put(key, detachValue(section.get(key)));
+        YamlConfiguration result = new YamlConfiguration();
+        writeMap(result, config.values());
         return result;
     }
 
-    private static Object detachValue(Object value) {
-        if (value instanceof ConfigurationSection section) return detach(section);
-        if (value instanceof List<?> list) {
-            List<Object> result = new ArrayList<>();
-            list.forEach(child -> result.add(detachValue(child)));
-            return result;
-        }
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            map.forEach((key, child) -> result.put(String.valueOf(key), detachValue(child)));
-            return result;
-        }
-        return value;
-    }
-
-    private static void fill(ConfigurationSection target, Map<?, ?> values) {
+    private static void writeMap(ConfigurationSection section, Map<?, ?> values) {
         values.forEach(
                 (key, value) -> {
-                    if (value instanceof Map<?, ?> map)
-                        fill(target.createSection(String.valueOf(key)), map);
-                    else target.set(String.valueOf(key), value);
+                    String name = String.valueOf(key);
+                    if (value instanceof Map<?, ?> map) writeMap(section.createSection(name), map);
+                    else section.set(name, value);
                 });
+    }
+
+    public static NiConfig fromSection(ConfigurationSection config) {
+        return new NiConfig(readMap(config));
+    }
+
+    private static Map<String, Object> readMap(ConfigurationSection section) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        section.getValues(false).forEach((key, value) -> result.put(key, detach(value)));
+        return result;
+    }
+
+    private static Object detach(Object value) {
+        if (value instanceof ConfigurationSection section) return readMap(section);
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, child) -> result.put(String.valueOf(key), detach(child)));
+            return result;
+        }
+        if (value instanceof List<?> list) return list.stream().map(NiYaml::detach).toList();
+        return value;
     }
 }

@@ -2,7 +2,6 @@ package dev.itemloom.compat.ni.script;
 
 import dev.itemloom.core.ActionFlow;
 
-/** Old script return objects are translated at the language boundary, not installed as NI classes. */
 public class LegacyActionResult implements Comparable<LegacyActionResult> {
     public enum Type {
         SUCCESS,

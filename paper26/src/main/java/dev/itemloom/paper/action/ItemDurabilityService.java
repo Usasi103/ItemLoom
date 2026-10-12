@@ -1,19 +1,14 @@
 package dev.itemloom.paper.action;
 
+import dev.itemloom.paper.nms.NmsItems;
+import dev.itemloom.paper.runtime.DurabilityCallbacks;
+import dev.itemloom.paper.runtime.ItemCopies;
+import dev.itemloom.paper.runtime.ScalarItemState;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.BooleanSupplier;
 import net.minecraft.core.component.DataComponents;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.Tag;
-import net.minecraft.world.item.component.CustomData;
-import dev.itemloom.paper.ItemsService;
-import dev.itemloom.paper.compat.NiCatalog;
-import dev.itemloom.paper.compat.script.LegacyItemEditorManager;
-import dev.itemloom.paper.nms.ItemStateCodec;
-import dev.itemloom.paper.nms.NmsItems;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
@@ -25,6 +20,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
@@ -34,9 +30,9 @@ import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerItemMendEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scheduler.BukkitRunnable;
 
-/** Custom durability is an inventory mutation, never a client-bound display or charge deduction. */
+/** Commits a damaged unit before transferring ownership of a stacked remainder. */
 public final class ItemDurabilityService implements Listener, AutoCloseable {
     public enum DamageResult {
         VANILLA,
@@ -47,38 +43,60 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
         INVALID_DAMAGE
     }
 
-    private final NiCatalog catalog;
+    private final DurabilityCallbacks callbacks;
     private final JavaPlugin plugin;
-    private final BooleanSupplier active;
-    private final Set<BukkitTask> refreshTasks = new HashSet<>();
+    private final Set<BukkitRunnable> refreshes = new HashSet<>();
+    private boolean activated;
+    private boolean closed;
 
-    ItemDurabilityService(NiCatalog catalog, JavaPlugin plugin, BooleanSupplier active) {
-        this.catalog = Objects.requireNonNull(catalog);
-        this.plugin = Objects.requireNonNull(plugin);
-        this.active = Objects.requireNonNull(active);
+    public ItemDurabilityService(DurabilityCallbacks callbacks, JavaPlugin plugin) {
+        this.callbacks = Objects.requireNonNull(callbacks, "callbacks");
+        this.plugin = Objects.requireNonNull(plugin, "plugin");
+    }
+
+    public void activate() {
+        if (!activated && active()) {
+            activated = true;
+            Bukkit.getPluginManager().registerEvents(this, plugin);
+        }
+    }
+
+    private boolean active() {
+        return !closed && callbacks.active();
     }
 
     public boolean usable(Player player, ItemStack item, Cancellable event) {
-        ItemsService.requireThread();
-        if (!active.getAsBoolean() || item == null || item.isEmpty()) return false;
-        State state = read(item);
-        if (state == null || state.current != 0) return true;
-        event.setCancelled(true);
-        catalog.triggers().broken(player);
+        if (!active() || item == null || item.isEmpty()) {
+            return false;
+        }
+        ScalarItemState.State state = ScalarItemState.read(item);
+        if (state == null || state.durability() == null || state.durability() != 0) {
+            return true;
+        }
+        if (event != null) {
+            event.setCancelled(true);
+        }
+        callbacks.broken(player);
         return false;
     }
 
-    /** Returns without copying custom data unless the displayed damage actually differs. */
     public void synchronize(ItemStack item) {
-        ItemsService.requireThread();
-        if (!active.getAsBoolean()) return;
-        State state = read(item);
-        if (state == null || maximumDamage(item) <= 0) return;
-        requireMaximum(state);
-        int expected = LegacyItemEditorManager.checkDurability(item, state.current, state.maximum);
-        var handle = CraftItemStack.unwrap(item);
-        if (handle.getOrDefault(DataComponents.DAMAGE, 0) != expected)
-            handle.set(DataComponents.DAMAGE, expected);
+        if (!active()) {
+            return;
+        }
+        ScalarItemState.State state = ScalarItemState.read(item);
+        if (state == null || state.durability() == null) {
+            return;
+        }
+        int ordinary = maximumDamage(item);
+        if (ordinary <= 0) {
+            return;
+        }
+        int capacity = capacity(state);
+        int display = editorDamage(ordinary, state.durability(), capacity);
+        if (display != damageValue(item)) {
+            setDamage(item, display);
+        }
     }
 
     public DamageResult damage(Player player, ItemStack item, int damage) {
@@ -91,64 +109,85 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
             int damage,
             boolean breakItem,
             PlayerItemDamageEvent event) {
-        ItemsService.requireThread();
-        if (damage < 0) return DamageResult.INVALID_DAMAGE;
-        if (damage == 0) return DamageResult.ZERO_DAMAGE;
-        if (!active.getAsBoolean()) return DamageResult.VANILLA;
-        State state = read(item);
-        if (state == null) return DamageResult.VANILLA;
-        if (state.current == 0) {
-            if (event != null) event.setCancelled(true);
+        if (damage < 0) {
+            return DamageResult.INVALID_DAMAGE;
+        }
+        if (damage == 0) {
+            return DamageResult.ZERO_DAMAGE;
+        }
+        if (!active()) {
+            return DamageResult.VANILLA;
+        }
+        ScalarItemState.State state = ScalarItemState.read(item);
+        if (state == null || state.durability() == null) {
+            return DamageResult.VANILLA;
+        }
+        int current = state.durability();
+        if (current == 0) {
+            if (event != null) {
+                event.setCancelled(true);
+            }
             return DamageResult.BROKEN_ITEM;
         }
-        requireMaximum(state);
-        int effective =
-                event == null
-                        ? DurabilityOutcome.effectiveDamage(
-                                damage,
-                                item.getEnchantmentLevel(Enchantment.UNBREAKING),
-                                ThreadLocalRandom.current())
-                        : damage;
-        if (effective == 0) return DamageResult.ZERO_DAMAGE;
-        int ordinaryMaximum = maximumDamage(item);
-        int priorDamage = damageValue(item);
-        Material material = item.getType();
-        var change =
-                DurabilityOutcome.change(
-                        state.current,
-                        state.maximum,
-                        ordinaryMaximum,
-                        effective,
-                        state.breakItem,
-                        breakItem && event == null);
-        ItemStack prepared = item.clone();
-        ItemStack remainder = null;
-        if (item.getAmount() > 1) {
-            remainder = item.clone();
-            remainder.setAmount(item.getAmount() - 1);
+        int capacity = capacity(state);
+        int effective = damage;
+        if (event == null) {
+            int unbreaking = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+            if (unbreaking > 0) {
+                effective = 0;
+                for (int opportunity = 0; opportunity < damage; opportunity++) {
+                    if (ThreadLocalRandom.current().nextLong((long) unbreaking + 1) == 0) {
+                        effective++;
+                    }
+                }
+            }
         }
-        prepared.setAmount(change.count());
-        if (change.displayedDamage() != null) {
-            writeCurrent(prepared, state, change.remaining());
-            if (event == null && ordinaryMaximum > 0)
-                CraftItemStack.unwrap(prepared)
-                        .set(DataComponents.DAMAGE, change.displayedDamage());
+        if (effective == 0) {
+            return DamageResult.ZERO_DAMAGE;
         }
-        NmsItems.replace(item, prepared);
-        // A returned unit becomes owned by the ledger only after the affected stack commits.
-        if (remainder != null) catalog.triggers().returnLater(player, remainder);
+        int ordinary = maximumDamage(item);
+        int previousDisplay = damageValue(item);
+        boolean exhausted = effective >= current;
+        int remaining = exhausted ? 0 : current - effective;
+        boolean physicalBreak = exhausted && state.breaks();
+        boolean removeNow = physicalBreak && breakItem && event == null;
+        int desiredDisplay =
+                exhausted
+                        ? Math.max(0, ordinary - 1)
+                        : (int) Math.floor(ordinary * (1.0 - (double) remaining / capacity));
+        ItemStack original = ItemCopies.detached(item);
+        ItemStack remainder = original.getAmount() > 1 ? ItemCopies.detached(original) : null;
+        if (remainder != null) {
+            remainder.setAmount(original.getAmount() - 1);
+        }
+        ItemStack target =
+                physicalBreak && !removeNow
+                        ? ItemCopies.detached(original)
+                        : ScalarItemState.durability(ItemCopies.detached(original), remaining);
+        target.setAmount(removeNow ? 0 : 1);
+        if (event == null && !physicalBreak && ordinary > 0) {
+            setDamage(target, desiredDisplay);
+        }
+        NmsItems.replace(item, target);
+        if (remainder != null) {
+            callbacks.returnLater(player, remainder);
+        }
         if (event != null) {
-            if (change.displayedDamage() != null)
-                event.setDamage(change.displayedDamage() - priorDamage);
-            else if (breakItem) event.setDamage(ordinaryMaximum - priorDamage + 1);
+            event.setDamage(
+                    physicalBreak
+                            ? ordinary - previousDisplay + 1
+                            : desiredDisplay - previousDisplay);
         }
-        if (change.exhausted()) {
-            catalog.triggers().broken(player);
-            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1, 1);
-            if (state.breakItem && breakItem && event == null && material != Material.FIRE_CHARGE)
-                player.incrementStatistic(Statistic.BREAK_ITEM, material);
+        if (exhausted) {
+            callbacks.broken(player);
+            if (player != null) {
+                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
+                if (removeNow && original.getType() != Material.FIRE_CHARGE) {
+                    player.incrementStatistic(Statistic.BREAK_ITEM, original.getType());
+                }
+            }
         }
-        return change.exhausted() && state.breakItem ? DamageResult.BREAK : DamageResult.SUCCESS;
+        return physicalBreak ? DamageResult.BREAK : DamageResult.SUCCESS;
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -158,47 +197,7 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void itemDamage(PlayerItemDamageEvent event) {
-        if (active.getAsBoolean())
-            damage(event.getPlayer(), event.getItem(), event.getDamage(), true, event);
-    }
-
-    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
-    public void mend(PlayerItemMendEvent event) {
-        ItemsService.requireThread();
-        if (!active.getAsBoolean()) return;
-        ItemStack item = event.getItem();
-        State state = read(item);
-        if (state == null) return;
-        requireMaximum(state);
-        ItemStack prepared = item.clone();
-        int remaining = clamp((long) state.current + event.getRepairAmount(), state.maximum);
-        repair(prepared, state, remaining);
-        NmsItems.replace(item, prepared);
-        event.setCancelled(true);
-        var orb = event.getExperienceOrb();
-        orb.setExperience(Math.max(0, orb.getExperience() - event.getRepairAmount() / 2));
-    }
-
-    @EventHandler(priority = EventPriority.NORMAL)
-    public void anvil(PrepareAnvilEvent event) {
-        ItemsService.requireThread();
-        if (!active.getAsBoolean()) return;
-        ItemStack original = event.getInventory().getItem(0), result = event.getResult();
-        State before = read(original), after = read(result);
-        if (before == null
-                || after == null
-                || !before.id.equals(after.id)
-                || before.current != after.current
-                || before.maximum != after.maximum
-                || damageValue(original) == damageValue(result)) return;
-        requireMaximum(after);
-        ItemStack prepared = result.clone();
-        int remaining =
-                clamp(
-                        (long) after.current + damageValue(original) - damageValue(result),
-                        after.maximum);
-        repair(prepared, after, remaining);
-        event.setResult(prepared);
+        damage(event.getPlayer(), event.getItem(), event.getDamage(), true, event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -206,56 +205,114 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
         usable(event.getPlayer(), event.getPlayer().getInventory().getItem(event.getHand()), event);
     }
 
-    /** The action listener calls this after its non-cancelled interaction actions. */
-    @SuppressWarnings("deprecation")
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void mend(PlayerItemMendEvent event) {
+        if (!active()) {
+            return;
+        }
+        ItemStack item = event.getItem();
+        ScalarItemState.State state = ScalarItemState.read(item);
+        if (state == null || state.durability() == null) {
+            return;
+        }
+        int maximum = capacity(state);
+        int repaired =
+                (int)
+                        Math.max(
+                                0,
+                                Math.min(
+                                        (long) maximum,
+                                        (long) state.durability() + event.getRepairAmount()));
+        ItemStack target = ScalarItemState.durability(ItemCopies.detached(item), repaired);
+        int ordinary = maximumDamage(target);
+        if (ordinary > 0) {
+            setDamage(target, editorDamage(ordinary, repaired, maximum));
+        }
+        NmsItems.replace(item, target);
+        event.setCancelled(true);
+        event.getExperienceOrb()
+                .setExperience(
+                        Math.max(
+                                0,
+                                event.getExperienceOrb().getExperience()
+                                        - event.getRepairAmount() / 2));
+    }
+
+    @EventHandler(priority = EventPriority.NORMAL)
+    public void anvil(PrepareAnvilEvent event) {
+        if (!active()) {
+            return;
+        }
+        ItemStack before = event.getInventory().getItem(0);
+        ItemStack result = event.getResult();
+        ScalarItemState.State previous = ScalarItemState.read(before);
+        ScalarItemState.State proposed = ScalarItemState.read(result);
+        if (previous == null
+                || proposed == null
+                || previous.durability() == null
+                || !previous.id().equals(proposed.id())
+                || !Objects.equals(previous.durability(), proposed.durability())
+                || !Objects.equals(previous.maximumDurability(), proposed.maximumDurability())) {
+            return;
+        }
+        int difference = damageValue(before) - damageValue(result);
+        if (difference == 0) {
+            return;
+        }
+        int capacity = capacity(previous);
+        int remaining =
+                (int)
+                        Math.max(
+                                0,
+                                Math.min(
+                                        (long) capacity,
+                                        (long) previous.durability() + difference));
+        ItemStack target = ScalarItemState.durability(ItemCopies.detached(result), remaining);
+        int ordinary = maximumDamage(target);
+        if (ordinary > 0) {
+            setDamage(target, editorDamage(ordinary, remaining, capacity));
+        }
+        event.setResult(target);
+    }
+
     public void igniteTnt(PlayerInteractEvent event) {
-        ItemsService.requireThread();
-        if (!active.getAsBoolean()
+        if (!active()
                 || event.isCancelled()
                 || event.getAction() != Action.RIGHT_CLICK_BLOCK
                 || event.getClickedBlock() == null
                 || event.getClickedBlock().getType() != Material.TNT
-                || event.getPlayer().getGameMode() == GameMode.CREATIVE) return;
-        ItemStack item = event.getItem();
-        if (item == null || item.getType() != Material.FIRE_CHARGE) return;
-        Player player = event.getPlayer();
-        DamageResult result = damage(player, item, 1, false, null);
-        if (result == DamageResult.BROKEN_ITEM) {
-            event.setCancelled(true);
+                || event.getPlayer().getGameMode() == GameMode.CREATIVE
+                || event.getItem() == null
+                || event.getItem().getType() != Material.FIRE_CHARGE) {
             return;
         }
-        if (result != DamageResult.SUCCESS && result != DamageResult.ZERO_DAMAGE) return;
-        // Vanilla removes one charge after this event, leaving this surviving custom unit.
-        item.setAmount(item.getAmount() + 1);
-        BukkitTask[] task = new BukkitTask[1];
-        task[0] =
-                Bukkit.getScheduler()
-                        .runTask(
-                                plugin,
-                                () -> {
-                                    refreshTasks.remove(task[0]);
-                                    if (active.getAsBoolean() && player.isOnline())
-                                        player.updateInventory();
-                                });
-        refreshTasks.add(task[0]);
-    }
-
-    private static void repair(ItemStack item, State state, int remaining) {
-        if (remaining == 0 && state.breakItem) item.setAmount(0);
-        else {
-            writeCurrent(item, state, remaining);
-            if (maximumDamage(item) > 0)
-                CraftItemStack.unwrap(item)
-                        .set(
-                                DataComponents.DAMAGE,
-                                (int)
-                                        LegacyItemEditorManager.checkDurability(
-                                                item, remaining, state.maximum));
+        DamageResult result = damage(event.getPlayer(), event.getItem(), 1, false, null);
+        if (result == DamageResult.BROKEN_ITEM) {
+            event.setCancelled(true);
+        } else if (result == DamageResult.SUCCESS || result == DamageResult.ZERO_DAMAGE) {
+            event.getItem().setAmount(event.getItem().getAmount() + 1);
+            Player player = event.getPlayer();
+            BukkitRunnable task =
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            refreshes.remove(this);
+                            if (active() && player.isOnline()) {
+                                player.updateInventory();
+                            }
+                        }
+                    };
+            task.runTask(plugin);
+            refreshes.add(task);
         }
     }
 
-    private static int clamp(long value, int maximum) {
-        return (int) Math.max(0, Math.min(value, maximum));
+    private static int capacity(ScalarItemState.State state) {
+        int value = state.maximumDurability() == null ? 0 : state.maximumDurability();
+        if (value <= 0) {
+            throw new IllegalArgumentException("Custom durability maximum must be positive");
+        }
+        return value;
     }
 
     private static int maximumDamage(ItemStack item) {
@@ -266,66 +323,28 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
         return CraftItemStack.unwrap(item).getOrDefault(DataComponents.DAMAGE, 0);
     }
 
-    private static void requireMaximum(State state) {
-        if (state.maximum <= 0)
-            throw new IllegalArgumentException(
-                    "Non-positive custom durability maximum for " + state.id);
+    private static void setDamage(ItemStack item, int damage) {
+        var copy = CraftItemStack.unwrap(item).copy();
+        copy.set(DataComponents.DAMAGE, damage);
+        NmsItems.replace(item, CraftItemStack.asCraftMirror(copy));
     }
 
-    /** No borrowed tag escapes: the hot gate projects only immutable scalar values. */
-    private static State read(ItemStack item) {
-        if (item == null || item.isEmpty()) return null;
-        var data = CraftItemStack.unwrap(item).get(DataComponents.CUSTOM_DATA);
-        if (data == null) return null;
-        CompoundTag custom = data.getUnsafe(), properties;
-        Tag raw = custom.get(ItemStateCodec.KEY);
-        boolean modern = raw != null;
-        String id;
-        if (modern) {
-            if (!(raw instanceof CompoundTag state) || state.getInt("schema").orElse(-1) != 1)
-                throw new IllegalArgumentException("Malformed or unsupported item state envelope");
-            id = state.getString("id").orElse(null);
-            properties = state.getCompound("properties").orElse(null);
-            if (id == null || properties == null)
-                throw new IllegalArgumentException("Incomplete item state envelope");
-        } else {
-            properties = custom.getCompound("NeigeItems").orElse(null);
-            if (properties == null) return null;
-            id = properties.getString("id").orElse(null);
-            if (id == null) return null;
-        }
-        Integer durability = properties.getInt("durability").orElse(null);
-        return durability == null
-                ? null
-                : new State(
-                        id,
-                        modern,
-                        durability,
-                        properties.getInt("maxDurability").orElse(0),
-                        properties.getBoolean("itemBreak").orElse(true));
+    private static int editorDamage(int ordinary, int remaining, int maximum) {
+        short quantized = (short) (int) (ordinary * (1.0 - (double) remaining / maximum));
+        int display = remaining < maximum && quantized <= 0 ? 1 : quantized;
+        return remaining > 0 && display >= ordinary ? (short) (display - 1) : display;
     }
-
-    /** Called only for a detached construction copy; preserve every unrelated custom-data field. */
-    private static void writeCurrent(ItemStack item, State state, int current) {
-        var handle = CraftItemStack.unwrap(item);
-        var data = handle.get(DataComponents.CUSTOM_DATA);
-        if (data == null) throw new IllegalStateException("Custom durability disappeared");
-        CompoundTag copy = data.copyTag();
-        CompoundTag properties =
-                state.modern
-                        ? copy.getCompoundOrEmpty(ItemStateCodec.KEY)
-                                .getCompoundOrEmpty("properties")
-                        : copy.getCompoundOrEmpty("NeigeItems");
-        properties.putInt("durability", current);
-        handle.set(DataComponents.CUSTOM_DATA, CustomData.of(copy));
-    }
-
-    private record State(String id, boolean modern, int current, int maximum, boolean breakItem) {}
 
     @Override
     public void close() {
-        ItemsService.requireThread();
-        refreshTasks.forEach(BukkitTask::cancel);
-        refreshTasks.clear();
+        if (closed) {
+            return;
+        }
+        closed = true;
+        HandlerList.unregisterAll(this);
+        for (BukkitRunnable task : refreshes) {
+            task.cancel();
+        }
+        refreshes.clear();
     }
 }

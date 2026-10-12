@@ -1,29 +1,18 @@
 package dev.itemloom.paper.compat;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
+import dev.itemloom.compat.ni.*;
+import dev.itemloom.core.*;
+import dev.itemloom.paper.compat.script.*;
+import java.io.*;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiRepository;
-import dev.itemloom.compat.ni.NiSourceDirectory;
-import dev.itemloom.compat.ni.NiYaml;
-import dev.itemloom.core.ItemEngine;
-import dev.itemloom.core.ItemRecipe;
-import dev.itemloom.paper.compat.script.LegacyItemConfig;
-import dev.itemloom.paper.compat.script.LegacyItemGenerator;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.inventory.ItemStack;
 
-/** Two independent legacy maps; one immutable publication supplies runtime recipes and hashes. */
 public final class NiItemRegistry {
     private record Published(
             ItemEngine.Catalog<ItemStack> catalog,
-            Map<String, Integer> updateHashes,
+            Map<String, Integer> hashes,
             Map<String, NiDisplayTemplate> displays,
             Object token) {}
 
@@ -35,51 +24,54 @@ public final class NiItemRegistry {
     private volatile Published published;
 
     NiItemRegistry(
-            long revision, NiRepository.Input input, Path inputRoot, NiItemOperations operations) {
+            long revision, NiRepository.Input input, Path root, NiItemOperations operations) {
         this.revision = revision;
         this.operations = operations;
+        published = publication(Map.of());
         configs = new RevisionMap<>(operations::ensureActive, (key, value) -> {}, () -> {});
         generators =
                 new RevisionMap<>(
                         operations::ensureActive,
                         (key, value) -> {
                             if (key.isBlank())
-                                throw new IllegalArgumentException("Blank item registry key");
+                                throw new IllegalArgumentException("Item registry key is required");
                             if (!value.ownedBy(operations))
                                 throw new IllegalArgumentException(
-                                        "Generator belongs to another item catalog revision");
+                                        "Generator belongs to another revision");
                         },
-                        this::publish);
-        configs.seed(originals(input.items(), inputRoot));
-        published =
-                new Published(
-                        new ItemEngine.Catalog<>(revision, Map.of()),
-                        Map.of(),
-                        Map.of(),
-                        new Object());
+                        () -> published = publication(generatorsSnapshot()));
+        configs.seed(originals(input.items(), root));
+    }
+
+    private Map<String, LegacyItemGenerator> generatorsSnapshot() {
+        return generators.snapshot();
     }
 
     static Map<String, LegacyItemConfig> originals(
-            Map<String, NiRepository.Definition> definitions, Path inputRoot) {
-        Map<String, ConfigurationSection> files = new LinkedHashMap<>();
-        Map<String, Map<String, Object>> grouped = new LinkedHashMap<>();
+            Map<String, NiRepository.Definition> definitions, Path root) {
+        Map<String, Map<String, Object>> sourceMaps = new LinkedHashMap<>();
+        definitions
+                .values()
+                .forEach(
+                        definition ->
+                                sourceMaps
+                                        .computeIfAbsent(
+                                                definition.source(),
+                                                ignored -> new LinkedHashMap<>())
+                                        .put(definition.id(), definition.config().values()));
+        Map<String, ConfigurationSection> roots = new HashMap<>();
+        sourceMaps.forEach(
+                (source, values) -> roots.put(source, NiConfigViews.section(new NiConfig(values))));
+        Map<String, LegacyItemConfig> result = new LinkedHashMap<>();
         definitions.forEach(
                 (id, definition) ->
-                        grouped.computeIfAbsent(
-                                        definition.source(), ignored -> new LinkedHashMap<>())
-                                .put(id, definition.config().values()));
-        grouped.forEach(
-                (source, values) -> files.put(source, NiYaml.toSection(new NiConfig(values))));
-        Map<String, LegacyItemConfig> initial = new LinkedHashMap<>();
-        definitions.forEach(
-                (id, definition) ->
-                        initial.put(
+                        result.put(
                                 id,
                                 new LegacyItemConfig(
                                         id,
-                                        inputRoot.resolve(definition.source()).normalize().toFile(),
-                                        files.get(definition.source()))));
-        return initial;
+                                        root.resolve(definition.source()).toFile(),
+                                        roots.get(definition.source()))));
+        return result;
     }
 
     public Map<String, LegacyItemConfig> configs() {
@@ -98,60 +90,52 @@ public final class NiItemRegistry {
     }
 
     public ItemEngine.Catalog<ItemStack> catalog() {
-        return published.catalog();
+        return published.catalog;
     }
 
-    /** Cache invalidation must not keep a closed catalog and its script engines reachable. */
     public Object publicationToken() {
-        return published.token();
+        return published.token;
     }
 
     public Integer updateHash(String id) {
-        return published.updateHashes().get(id);
+        return published.hashes.get(id);
     }
 
     public Map<String, NiDisplayTemplate> displays() {
-        return published.displays();
+        return published.displays;
     }
 
-    void initialize(Map<String, LegacyItemGenerator> initial) {
-        generators.seed(initial);
-        publish();
+    void initialize(Map<String, LegacyItemGenerator> values) {
+        generators.seed(values);
+        published = publication(values);
     }
 
-    void initializeFiles(Path inputRoot) {
+    void initializeFiles(Path root) {
         try {
-            NiSourceDirectory.list(inputRoot.resolve("Items"))
-                    .forEach(path -> files.add(path.toFile()));
+            for (Path file : NiSourceDirectory.list(root.resolve("Items")))
+                files.add(file.toFile());
         } catch (IOException error) {
-            throw new UncheckedIOException("Cannot list item source files", error);
+            throw new UncheckedIOException(error);
         }
     }
 
-    /** A null generator map means source-only reload, with the exact previous publication retained. */
     Runnable prepareReload(
-            Map<String, LegacyItemConfig> nextConfigs,
-            List<Path> nextFiles,
-            Map<String, LegacyItemGenerator> nextGenerators) {
-        operations.ensureActive();
-        Runnable replaceConfigs = configs.prepareReplacement(nextConfigs);
+            Map<String, LegacyItemConfig> originals,
+            List<Path> paths,
+            Map<String, LegacyItemGenerator> compiled) {
+        Runnable replaceConfigs = configs.prepareReplacement(originals);
         Runnable replaceGenerators =
-                nextGenerators == null ? null : generators.prepareReplacement(nextGenerators);
-        Published next = nextGenerators == null ? null : publication(nextGenerators);
-        ArrayList<File> copiedFiles = new ArrayList<>();
-        nextFiles.forEach(path -> copiedFiles.add(path.toFile()));
+                compiled == null ? null : generators.prepareReplacement(compiled);
+        Published publication = compiled == null ? published : publication(compiled);
+        List<File> preparedFiles = paths.stream().map(Path::toFile).toList();
         return () -> {
             operations.ensureActive();
             replaceConfigs.run();
             if (replaceGenerators != null) replaceGenerators.run();
             files.clear();
-            files.addAll(copiedFiles);
-            if (next != null) published = next;
+            files.addAll(preparedFiles);
+            published = publication;
         };
-    }
-
-    private void publish() {
-        published = publication(generators.snapshot());
     }
 
     private Published publication(Map<String, LegacyItemGenerator> values) {
@@ -160,15 +144,15 @@ public final class NiItemRegistry {
         Map<String, NiDisplayTemplate> displays = new LinkedHashMap<>();
         values.forEach(
                 (key, generator) -> {
-                    NiPaperRecipe recipe = generator.compiledRecipe();
-                    recipes.put(key, recipe);
-                    if (generator.getUpdate()) hashes.put(key, recipe.definitionHash());
-                    if (recipe.display() != null) displays.put(key, recipe.display());
+                    recipes.put(key, generator.compiledRecipe());
+                    if (generator.getUpdate()) hashes.put(key, generator.getHashCode());
+                    if (generator.compiledRecipe().display() != null)
+                        displays.put(key, generator.compiledRecipe().display());
                 });
         return new Published(
                 new ItemEngine.Catalog<>(revision, recipes),
-                Map.copyOf(hashes),
-                Map.copyOf(displays),
+                Collections.unmodifiableMap(hashes),
+                Collections.unmodifiableMap(displays),
                 new Object());
     }
 }

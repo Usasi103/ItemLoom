@@ -1,24 +1,17 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
+import dev.itemloom.paper.compat.*;
+import dev.itemloom.paper.compat.nbt.*;
+import java.util.*;
 import java.util.function.BiFunction;
 import net.minecraft.core.component.DataComponents;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.*;
 import net.minecraft.network.chat.contents.PlainTextContents;
 import net.minecraft.world.item.component.ItemLore;
-import dev.itemloom.paper.compat.NiItemOperations;
-import dev.itemloom.paper.compat.NiItemNodes;
-import dev.itemloom.paper.compat.nbt.LegacyNbt;
-import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.craftbukkit.util.CraftChatMessage;
 import org.bukkit.inventory.ItemStack;
 
-/** Percent placeholder and JSON replacement contract from NI, owned by one catalog revision. */
 public final class LegacyItemPlaceholder {
     public final LegacyItemPlaceholder INSTANCE = this;
     private final NiItemOperations owner;
@@ -27,7 +20,7 @@ public final class LegacyItemPlaceholder {
 
     public LegacyItemPlaceholder(NiItemOperations owner) {
         this.owner = owner;
-        expansions.put("neigeitems", this::builtIn);
+        expansions.put("neigeitems", this::builtin);
     }
 
     public HashMap<String, BiFunction<ItemStack, String, String>> getExpansions() {
@@ -64,7 +57,7 @@ public final class LegacyItemPlaceholder {
                 LegacyPercentText.parse(
                         text,
                         (id, parameters) -> {
-                            var expansion = expansions.get(id);
+                            BiFunction<ItemStack, String, String> expansion = expansions.get(id);
                             return expansion == null ? null : expansion.apply(item, parameters);
                         });
         return new ParseResult(result.text(), result.changed());
@@ -72,12 +65,12 @@ public final class LegacyItemPlaceholder {
 
     public void itemParse(ItemStack item) {
         owner.ensureActive();
-        if (!(item instanceof CraftItemStack)) return;
-        var handle = CraftItemStack.unwrap(item);
+        if (!(item instanceof CraftItemStack craft) || craft.handle == null) return;
+        var handle = craft.handle;
         Component name = handle.get(DataComponents.CUSTOM_NAME);
         if (name != null) {
-            Component edited = component(item, name);
-            if (edited != name) handle.set(DataComponents.CUSTOM_NAME, edited);
+            Component changed = component(item, name);
+            if (changed != name) handle.set(DataComponents.CUSTOM_NAME, changed);
         }
         ItemLore lore = handle.get(DataComponents.LORE);
         if (lore != null) {
@@ -91,42 +84,39 @@ public final class LegacyItemPlaceholder {
     private List<Component> components(ItemStack item, List<Component> source) {
         List<Component> result = null;
         for (int i = 0; i < source.size(); i++) {
-            Component before = source.get(i), after = component(item, before);
-            if (before != after) {
-                if (result == null) result = new ArrayList<>(source);
-                result.set(i, after);
-            }
+            Component value = source.get(i), changed = component(item, value);
+            if (result == null && changed != value) result = new ArrayList<>(source);
+            if (result != null) result.set(i, changed);
         }
         return result == null ? source : List.copyOf(result);
     }
 
-    private Component component(ItemStack item, Component source) {
-        if (source == null || definitelyStatic(source, 0)) return source;
-        // NI parses the entire component JSON, including translation/style strings. Keep
-        // that contract rather than flattening styled/interactive components to plain text.
-        ParseResult result = parse(item, CraftChatMessage.toJSON(source));
-        return result.getChanged() ? CraftChatMessage.fromJSON(result.getText()) : source;
+    private Component component(ItemStack item, Component component) {
+        if (definitelyStatic(component, 0)) return component;
+        ParseResult parsed = parse(item, CraftChatMessage.toJSON(component));
+        return parsed.getChanged() ? CraftChatMessage.fromJSON(parsed.getText()) : component;
     }
 
     public static boolean definitelyStatic(Component component, int depth) {
         if (component == null
                 || depth >= 64
-                || !(component.getContents() instanceof PlainTextContents literal)
-                || literal.text().indexOf('%') >= 0) return false;
+                || !(component.getContents() instanceof PlainTextContents text)
+                || text.text().indexOf('%') >= 0) return false;
         Style style = component.getStyle();
         if (style.getClickEvent() != null
                 || style.getHoverEvent() != null
                 || style.getInsertion() != null && style.getInsertion().indexOf('%') >= 0
-                || !java.util.Objects.equals(style.getFont(), Style.EMPTY.getFont())) return false;
-        for (Component child : component.getSiblings())
-            if (!definitelyStatic(child, depth + 1)) return false;
+                || !Objects.equals(style.getFont(), Style.EMPTY.getFont())) return false;
+        for (Component sibling : component.getSiblings())
+            if (!definitelyStatic(sibling, depth + 1)) return false;
         return true;
     }
 
-    private String builtIn(ItemStack stack, String parameters) {
-        String[] args = parameters.split("_", 2);
-        String kind = args[0].toLowerCase(Locale.getDefault());
-        String field =
+    private String builtin(ItemStack item, String parameters) {
+        String[] parts = parameters.split("_", 2);
+        String kind = parts[0].toLowerCase(Locale.getDefault());
+        String rest = parts.length == 2 ? parts[1] : "";
+        String state =
                 switch (kind) {
                     case "charge" -> "charge";
                     case "maxcharge" -> "maxCharge";
@@ -134,35 +124,27 @@ public final class LegacyItemPlaceholder {
                     case "maxdurability" -> "maxDurability";
                     default -> null;
                 };
-        if (field != null) {
-            Integer value = NiItemNodes.legacyInteger(stack, field);
+        if (state != null) {
+            Integer value = NiItemNodes.legacyInteger(item, state);
             return value == null ? null : value.toString();
         }
         if (kind.equals("itembreak")) {
-            Boolean value = NiItemNodes.legacyBoolean(stack, "itemBreak", true);
-            if (value == null) return null;
-            String[] values = args.length > 1 ? args[1].split("_", 2) : new String[0];
-            int index = value ? 1 : 0;
-            return values.length > index ? values[index] : null;
+            Boolean value = NiItemNodes.legacyBoolean(item, "itemBreak", true);
+            if (value == null || parts.length < 2) return null;
+            String[] options = rest.split("_", 2);
+            int selected = value ? 1 : 0;
+            return selected < options.length ? options[selected] : null;
         }
-        LegacyNbt.Compound tag = new LegacyNbtItemStack(stack).getTag();
+        if (!kind.equals("nbt") && !kind.equals("nbtnumber")) return null;
+        LegacyNbt.Compound tag = new LegacyNbtItemStack(item).getTag();
         if (tag == null) return null;
-        return switch (kind) {
-            case "nbt" -> {
-                LegacyNbt value = tag.getDeep(args.length > 1 ? args[1] : "", '`', '\\');
-                yield value == null ? null : value.getAsString();
-            }
-            case "nbtnumber" -> {
-                String[] values = args.length > 1 ? args[1].split("_", 2) : new String[0];
-                LegacyNbt value = tag.getDeep(values.length > 1 ? values[1] : "", '`', '\\');
-                yield value instanceof LegacyNbt.Numeric number
-                        ? String.format(
-                                Locale.getDefault(),
-                                "%." + (values.length > 0 ? values[0] : null) + "f",
-                                number.getAsDouble())
-                        : null;
-            }
-            default -> null;
-        };
+        if (kind.equals("nbt")) {
+            LegacyNbt value = tag.getDeep(rest, '`', '\\');
+            return value == null ? null : value.getAsString();
+        }
+        String[] number = rest.split("_", 2);
+        LegacyNbt value = tag.getDeep(number.length == 2 ? number[1] : "", '`', '\\');
+        if (!(value instanceof LegacyNbt.Numeric numeric)) return null;
+        return String.format(Locale.getDefault(), "%." + number[0] + "f", numeric.getAsDouble());
     }
 }

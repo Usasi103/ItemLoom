@@ -1,35 +1,27 @@
 package dev.itemloom.paper.compat;
 
-import java.util.ArrayList;
-import java.util.ConcurrentModificationException;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import dev.itemloom.compat.ni.action.*;
+import dev.itemloom.compat.ni.script.LegacyConfigReader;
+import dev.itemloom.paper.compat.nbt.LegacyNbt;
+import dev.itemloom.paper.compat.script.*;
+import dev.itemloom.paper.nms.NmsItems;
+import java.util.*;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.action.NiContextKeys;
-import dev.itemloom.compat.ni.script.LegacyConfigReader;
-import dev.itemloom.paper.ItemsService;
-import dev.itemloom.paper.compat.nbt.LegacyNbt;
-import dev.itemloom.paper.compat.nbt.LegacyNbtItemStack;
-import dev.itemloom.paper.compat.script.LegacyItemGenerator;
-import dev.itemloom.paper.compat.script.LegacyItemInfo;
-import dev.itemloom.paper.compat.script.LegacyItemUpdateEvent;
-import dev.itemloom.paper.nms.NmsItems;
+import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/** NI regeneration rules, confined to a single independent catalog revision. */
+/** Prepares replacements off the live stack and commits after the last callback fence. */
 public final class NiItemOperations {
     private final NiCatalog catalog;
+    private final NiItemMigration migration = new NiItemMigration();
 
     public NiItemOperations(NiCatalog catalog) {
-        this.catalog = java.util.Objects.requireNonNull(catalog);
+        this.catalog = Objects.requireNonNull(catalog);
     }
 
     public NiCatalog catalog() {
@@ -37,23 +29,25 @@ public final class NiItemOperations {
     }
 
     public void ensureActive() {
-        ItemsService.requireThread();
+        if (Bukkit.getServer() != null && !Bukkit.isPrimaryThread())
+            throw new IllegalStateException("Item operations require the main thread");
         if (!catalog.active() || catalog.catalog() == null)
-            throw new IllegalStateException("Item catalog is not ready or has closed");
+            throw new IllegalStateException("Item catalog is closed");
     }
 
-    /** The old script API returns null for missing IDs and fills its caller's mutable cache. */
-    public ItemStack create(String id, OfflinePlayer player, Map<String, String> data) {
+    public ItemStack create(String id, OfflinePlayer player, Map<String, String> rolls) {
         ensureActive();
-        LegacyItemGenerator generator = catalog.registry().generators().get(id);
-        return generator == null ? null : create(generator, player, data);
+        return create(catalog.registry().generators().get(id), player, rolls);
     }
 
     public ItemStack create(
-            LegacyItemGenerator generator, OfflinePlayer player, Map<String, String> data) {
+            LegacyItemGenerator generator, OfflinePlayer player, Map<String, String> rolls) {
         ensureActive();
+        if (generator == null) return null;
+        if (!generator.ownedBy(this))
+            throw new IllegalArgumentException("Generator belongs to another revision");
         try {
-            return catalog.generate(generator, player, data, true);
+            return catalog.generate(generator, player, rolls, true);
         } catch (NiPaperRecipe.InvalidMaterialException invalid) {
             return null;
         }
@@ -62,39 +56,47 @@ public final class NiItemOperations {
     public boolean rebuild(
             ItemStack item,
             OfflinePlayer player,
-            Map<String, String> sections,
-            List<String> protectNbt) {
+            Map<String, String> overrides,
+            List<String> protectNBT) {
         ensureActive();
         if (item == null || item.isEmpty()) return false;
         ItemStack before = item.clone();
-        LegacyItemInfo info = LegacyItemInfo.inspect(before);
-        if (info == null) return true;
-        Map<String, String> data = info.getData();
-        overrides(data, sections);
-        ItemStack generated = create(info.getId(), player, data);
-        if (generated != null)
-            finish(item, before, prepare(info, generated, protectNbt, List.of()));
-        return true;
+        LegacyItemInfo old = LegacyItemInfo.inspect(before);
+        if (old == null) return true;
+        Map<String, String> rolls = new LinkedHashMap<>(old.getData());
+        change(rolls, overrides);
+        return rebuild(item, before, old, player, rolls, protectNBT);
     }
 
     public boolean rebuild(
             ItemStack item,
             OfflinePlayer player,
             List<String> protectSections,
-            List<String> protectNbt) {
+            List<String> protectNBT) {
         ensureActive();
         if (item == null || item.isEmpty()) return false;
         ItemStack before = item.clone();
-        LegacyItemInfo info = LegacyItemInfo.inspect(before);
-        if (info == null) return true;
-        Map<String, String> data = new LinkedHashMap<>();
-        for (String key : protectSections) {
-            String value = info.getData().get(key);
-            if (value != null) data.put(key, value);
-        }
-        ItemStack generated = create(info.getId(), player, data);
-        if (generated != null)
-            finish(item, before, prepare(info, generated, protectNbt, List.of()));
+        LegacyItemInfo old = LegacyItemInfo.inspect(before);
+        if (old == null) return true;
+        Map<String, String> rolls = new LinkedHashMap<>();
+        if (protectSections != null)
+            for (String key : protectSections) {
+                String value = old.getData().get(key);
+                if (value != null) rolls.put(key, value);
+            }
+        return rebuild(item, before, old, player, rolls, protectNBT);
+    }
+
+    private boolean rebuild(
+            ItemStack item,
+            ItemStack before,
+            LegacyItemInfo old,
+            OfflinePlayer player,
+            Map<String, String> rolls,
+            List<String> protectedPaths) {
+        ItemStack generated = create(old.getId(), player, rolls);
+        if (generated == null) return true;
+        commit(item, before, replacement(before, old, generated, protectedPaths, null));
         return true;
     }
 
@@ -107,158 +109,163 @@ public final class NiItemOperations {
         ensureActive();
         if (item == null || item.isEmpty()) return false;
         ItemStack before = item.clone();
+        int quantity =
+                amount == null
+                        ? before.getAmount()
+                        : Math.min(before.getAmount(), Math.max(1, amount));
+        boolean split = quantity < before.getAmount();
+        if (split && player == null)
+            throw new IllegalArgumentException("A player is required to return the remainder");
+        LegacyItemInfo old = LegacyItemInfo.inspect(before);
         ItemStack prepared = before.clone();
-        LegacyItemInfo info = LegacyItemInfo.inspect(before);
-        if (info != null) {
-            Map<String, String> data = info.getData();
-            if (remove != null) remove.forEach(data::remove);
-            overrides(data, changes);
-            ItemStack generated = create(info.getId(), player, data);
+        if (old != null) {
+            Map<String, String> rolls = new LinkedHashMap<>(old.getData());
+            if (remove != null) remove.forEach(rolls::remove);
+            change(rolls, changes);
+            ItemStack generated = create(old.getId(), player, rolls);
             if (generated != null) {
-                LegacyNbt.Compound tag = new LegacyNbt.Compound(NiItemNodes.legacyData(generated));
-                // NI 26.2 refresh deliberately leaves display and other components on the old
-                // stack; rebuild/update are the operations that replace all components.
-                if (tag.getCompound("NeigeItems") != null) {
-                    preserveState(info.getNeigeItems(), tag);
-                    new LegacyNbtItemStack(prepared).setTag(tag);
+                if (generated.isEmpty()) prepared.setAmount(0);
+                else {
+                    prepared.setType(generated.getType());
+                    LegacyNbt.Compound nbt =
+                            new LegacyNbt.Compound(NiItemNodes.legacyData(generated));
+                    preserveState(old.getNeigeItems(), nbt);
+                    prepared = NmsItems.withCustomData(prepared, migration.convert(nbt.copyTag()));
                 }
-                prepared.setType(generated.getType());
             }
         }
+        if (!prepared.isEmpty()) prepared.setAmount(quantity);
         ItemStack remainder = null;
-        if (amount != null && Math.max(1, amount) < before.getAmount()) {
-            if (player == null)
-                throw new IllegalArgumentException("Splitting an item requires a player");
+        if (split) {
             remainder = before.clone();
-            remainder.setAmount(before.getAmount() - Math.max(1, amount));
-            prepared.setAmount(Math.max(1, amount));
+            remainder.setAmount(before.getAmount() - quantity);
         }
-        finish(item, before, prepared);
+        commit(item, before, prepared);
         if (remainder != null) catalog.triggers().returnLater(player, remainder);
         return true;
     }
 
-    public void update(Player player, ItemStack item, boolean force, boolean sendMessage) {
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public void update(Player player, ItemStack item, boolean force, boolean message) {
         ensureActive();
         if (item == null || item.isEmpty()) return;
         ItemStack before = item.clone();
-        LegacyItemInfo info = LegacyItemInfo.inspect(before);
-        if (info == null) return;
-        LegacyItemGenerator generator = catalog.registry().generators().get(info.getId());
-        if (generator == null) return;
-        NiPaperRecipe recipe = generator.compiledRecipe();
-        NiConfig options = recipe.definition().definition().section("options.update");
-        if (options == null || !options.bool("enable", false)) return;
-        if (!force
-                && info.getNeigeItems().getInt("hashCode", recipe.definitionHash())
-                        == recipe.definitionHash()) return;
-
-        Map<String, String> data = info.getData();
-        var context = catalog.actionContext(player, null);
+        LegacyItemInfo old = LegacyItemInfo.inspect(before);
+        if (old == null) return;
+        LegacyItemGenerator generator = catalog.registry().generators().get(old.getId());
+        if (generator == null || !generator.getUpdate()) return;
+        int hash = generator.getHashCode();
+        if (!force && old.getNeigeItems().getInt("hashCode", hash) == hash) return;
+        Map<String, String> oldRolls = new LinkedHashMap<>(old.getData());
+        NiActionContext context = catalog.actionContext(player, null);
         context.set(NiContextKeys.SECTIONS, LegacyConfigReader.parse(generator.getSections()));
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        Map<String, Object> cache = (Map) data;
-        context.set(NiContextKeys.SECTION_CACHE, cache);
-        Map<String, String> changes = new HashMap<>();
+        context.set(NiContextKeys.SECTION_CACHE, (Map) oldRolls);
+        Map<String, String> changes = new LinkedHashMap<>();
         Map<String, String> configured = generator.getRebuildData();
         if (configured != null) {
-            // Do not mutate the shared cache until all expressions have observed old values.
             configured.forEach(
                     (key, value) -> changes.put(context.parse(key), context.parse(value)));
         }
-        List<String> remove = new ArrayList<>();
-        for (String key : options.strings("refresh")) remove.add(context.parse(key));
-        data.putAll(changes);
-        remove.forEach(data::remove);
-
-        ensureUnchanged(item, before);
-        var pre = new LegacyItemUpdateEvent.PreGenerate(player, item, data, generator);
-        if (!pre.call()) return;
-        ensureUnchanged(item, before);
-        ItemStack generated = pre.getItem().getItemStack(player, pre.getData());
+        List<String> removals = new ArrayList<>();
+        for (String key : generator.getRefreshData()) removals.add(context.parse(key));
+        Map<String, String> rolls = oldRolls;
+        rolls.putAll(changes);
+        removals.forEach(rolls::remove);
+        fence(item, before);
+        LegacyItemUpdateEvent.PreGenerate pre =
+                new LegacyItemUpdateEvent.PreGenerate(player, item, rolls, generator);
+        pre.call();
+        if (pre.isCancelled()) return;
+        fence(item, before);
+        ItemStack generated = create(pre.getItem(), player, pre.getData());
         if (generated == null) return;
-        var post = new LegacyItemUpdateEvent.PostGenerate(player, item, generated);
-        if (!post.call()) return;
+        LegacyItemUpdateEvent.PostGenerate post =
+                new LegacyItemUpdateEvent.PostGenerate(player, item, generated);
+        post.call();
+        if (post.isCancelled()) return;
         ItemStack prepared =
-                prepare(
-                        info,
+                replacement(
+                        before,
+                        old,
                         post.getNewItem(),
-                        options.strings("protect"),
-                        options.strings("protect-components"));
-        finish(item, before, prepared);
-        if (sendMessage && player != null) sendUpdateMessage(player, before);
+                        generator.getProtectNBT(),
+                        generator.getProtectComponents());
+        commit(item, before, prepared);
+        if (message && player != null) {
+            String text = catalog.input().settings().string("Messages.legacyItemUpdateMessage", "");
+            if (!text.isEmpty())
+                player.sendMessage(text.replace("{name}", catalog.itemName(before)));
+        }
     }
 
-    private void sendUpdateMessage(Player player, ItemStack before) {
-        String message = catalog.input().settings().string("Messages.legacyItemUpdateMessage");
-        if (message == null || message.isEmpty()) return;
-        player.sendMessage(message.replace("{name}", catalog.itemName(before)));
-    }
-
-    private static void overrides(Map<String, String> data, Map<String, String> changes) {
-        if (changes != null)
-            changes.forEach(
-                    (key, value) -> {
-                        if (value == null) data.remove(key);
-                        else data.put(key, value);
-                    });
-    }
-
-    private static ItemStack prepare(
+    private ItemStack replacement(
+            ItemStack before,
             LegacyItemInfo old,
             ItemStack generated,
-            List<String> protectNbt,
-            List<String> protectComponents) {
-        ItemStack result = generated.clone();
-        if (result.isEmpty()) {
-            result.setAmount(0);
-            return result;
+            List<String> paths,
+            List<String> components) {
+        ItemStack prepared = Objects.requireNonNull(generated, "Generated item").clone();
+        if (prepared.isEmpty()) {
+            prepared.setAmount(0);
+            return prepared;
         }
-        LegacyNbt.Compound tag = new LegacyNbt.Compound(NiItemNodes.legacyData(result));
-        preserveState(old.getNeigeItems(), tag);
-        if (protectNbt != null)
-            for (String key : protectNbt) {
-                LegacyNbt value = old.getItemTag().getDeep(key);
-                if (value != null) tag.putDeep(key, value);
+        LegacyNbt.Compound nbt = new LegacyNbt.Compound(NiItemNodes.legacyData(prepared));
+        if (paths != null)
+            for (String path : paths) {
+                LegacyNbt value = old.getItemTag().getDeep(path);
+                if (value != null) nbt.putDeep(path, value.clone());
             }
-        var target = CraftItemStack.unwrap(result);
-        var previous = CraftItemStack.asNMSCopy(old.getItemStack());
-        for (String key : protectComponents) {
-            Identifier id = Identifier.tryParse(key);
-            DataComponentType<?> type =
-                    id == null ? null : BuiltInRegistries.DATA_COMPONENT_TYPE.getValue(id);
-            if (type != null) preserveComponent(target, previous, type);
+        preserveState(old.getNeigeItems(), nbt);
+        if (components != null && !components.isEmpty()) {
+            var source = CraftItemStack.asNMSCopy(before);
+            var target = CraftItemStack.asNMSCopy(prepared);
+            for (String key : components) {
+                Identifier id = key == null ? null : Identifier.tryParse(key);
+                DataComponentType<?> type =
+                        id == null ? null : BuiltInRegistries.DATA_COMPONENT_TYPE.getValue(id);
+                if (type != null) copyComponent(source, target, type);
+            }
+            prepared = CraftItemStack.asBukkitCopy(target);
         }
-        // As in NI, protected custom_data is followed by the regenerated/protected NBT tree.
-        new LegacyNbtItemStack(result).setTag(tag);
-        result.setAmount(old.getItemStack().getAmount());
-        return result;
+        prepared = NmsItems.withCustomData(prepared, migration.convert(nbt.copyTag()));
+        prepared.setAmount(before.getAmount());
+        return prepared;
     }
 
-    private static <T> void preserveComponent(
+    private static <T> void copyComponent(
+            net.minecraft.world.item.ItemStack source,
             net.minecraft.world.item.ItemStack target,
-            net.minecraft.world.item.ItemStack old,
             DataComponentType<T> type) {
-        T value = old.get(type);
+        T value = source.get(type);
         if (value == null) target.remove(type);
         else target.set(type, value);
     }
 
-    private static void preserveState(LegacyNbt.Compound previous, LegacyNbt.Compound tag) {
-        var destination = tag.getCompound("NeigeItems");
-        if (destination != null)
-            LegacyStateRules.captureNumericState(previous::containsKey, previous::getInt)
-                    .applyTo(destination::putInt);
+    private static void preserveState(LegacyNbt.Compound source, LegacyNbt.Compound data) {
+        LegacyNbt.Compound destination = data.getCompoundOrNull("NeigeItems");
+        if (destination == null) return;
+        LegacyStateRules.captureNumericState(key -> source.contains(key, 99), source::getInt)
+                .applyTo(destination::putInt);
     }
 
-    private void ensureUnchanged(ItemStack item, ItemStack before) {
+    private static void change(Map<String, String> rolls, Map<String, String> changes) {
+        if (changes != null)
+            changes.forEach(
+                    (key, value) -> {
+                        if (value == null) rolls.remove(key);
+                        else rolls.put(key, value);
+                    });
+    }
+
+    private void fence(ItemStack item, ItemStack before) {
         ensureActive();
         if (!item.equals(before))
-            throw new ConcurrentModificationException("Item changed during regeneration");
+            throw new ConcurrentModificationException(
+                    "Item changed while its replacement was being prepared");
     }
 
-    private void finish(ItemStack item, ItemStack before, ItemStack prepared) {
-        ensureUnchanged(item, before);
+    private void commit(ItemStack item, ItemStack before, ItemStack prepared) {
+        fence(item, before);
         NmsItems.replace(item, prepared);
     }
 }

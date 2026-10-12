@@ -1,13 +1,10 @@
 package dev.itemloom.compat.ni.script;
 
-import java.util.Map;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiTemplate;
-import dev.itemloom.compat.ni.NiYaml;
+import dev.itemloom.compat.ni.*;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.inventory.ItemStack;
 
-/** NI names are resolved to this adapter only inside a script engine. */
 public final class LegacySectionUtils {
     public interface ItemView {
         Object getItemTag();
@@ -19,9 +16,32 @@ public final class LegacySectionUtils {
 
     private LegacySectionUtils() {}
 
+    private static String evaluate(
+            String text,
+            boolean expression,
+            Map<String, String> cache,
+            Object player,
+            ConfigurationSection sections) {
+        NiEvaluation evaluation =
+                NiEvaluation.current()
+                        .legacyContext(
+                                cache,
+                                player,
+                                sections == null ? null : NiYaml.fromSection(sections));
+        try {
+            String value = expression ? evaluation.value(text) : evaluation.text(text);
+            return expression && value == null ? "<" + text + ">" : value;
+        } finally {
+            if (cache != null && cache != evaluation.generation().rolls()) {
+                cache.clear();
+                cache.putAll(evaluation.generation().rolls());
+            }
+        }
+    }
+
     public static String parseSection(
             String text, Map<String, String> cache, Object player, ConfigurationSection sections) {
-        return evaluate(text, cache, player, sections, true);
+        return evaluate(text, false, cache, player, sections);
     }
 
     public static String parseSection(
@@ -43,19 +63,18 @@ public final class LegacySectionUtils {
 
     public static String getSection(
             String text, Map<String, String> cache, Object player, ConfigurationSection sections) {
-        return evaluate(text, cache, player, sections, false);
+        return evaluate(text, true, cache, player, sections);
     }
 
-    public static String parseItemSection(
-            String text, org.bukkit.inventory.ItemStack item, Object nbt, Object player) {
-        if (nbt instanceof ItemView info)
-            return parseItemSection(text, item, info.getItemTag(), info.getData(), player);
-        return parseItemSection(text, item, nbt, null, player);
+    public static String parseItemSection(String text, ItemStack item, Object nbt, Object player) {
+        return nbt instanceof ItemView view
+                ? parseItemSection(text, item, view, player, null, null)
+                : parseItemSection(text, item, nbt, null, player, null, null);
     }
 
     public static String parseItemSection(
             String text,
-            org.bukkit.inventory.ItemStack item,
+            ItemStack item,
             ItemView info,
             Object player,
             Map<String, String> cache,
@@ -65,17 +84,13 @@ public final class LegacySectionUtils {
     }
 
     public static String parseItemSection(
-            String text,
-            org.bukkit.inventory.ItemStack item,
-            Object nbt,
-            Map<String, String> data,
-            Object player) {
+            String text, ItemStack item, Object nbt, Map<String, String> data, Object player) {
         return parseItemSection(text, item, nbt, data, player, null, null);
     }
 
     public static String parseItemSection(
             String text,
-            org.bukkit.inventory.ItemStack item,
+            ItemStack item,
             Object nbt,
             Map<String, String> data,
             Object player,
@@ -90,7 +105,7 @@ public final class LegacySectionUtils {
 
     public static String getItemSection(
             String text,
-            org.bukkit.inventory.ItemStack item,
+            ItemStack item,
             Object nbt,
             Map<String, String> data,
             Object player,
@@ -98,36 +113,14 @@ public final class LegacySectionUtils {
             ConfigurationSection sections) {
         int split = text.indexOf("::");
         if (split < 0) return getSection(text, cache, player, sections);
-        String type = text.substring(0, split).toLowerCase(java.util.Locale.ROOT);
-        String parameters = text.substring(split + 2);
-        if (!java.util.Set.of("nbt", "data", "amount", "type", "name", "damage").contains(type))
+        String type = text.substring(0, split).toLowerCase(Locale.ROOT);
+        if (!Set.of("nbt", "data", "amount", "type", "name", "damage").contains(type))
             return getSection(text, null, player, null);
-        NiEvaluation active = NiEvaluation.current();
-        String value =
-                active.host() == null
+        NiEvaluation.Host host = NiEvaluation.current().host();
+        String result =
+                host == null
                         ? null
-                        : active.host().legacyItemValue(type, parameters, item, nbt, data);
-        return value == null ? "<" + text + ">" : value;
-    }
-
-    private static String evaluate(
-            String text,
-            Map<String, String> cache,
-            Object player,
-            ConfigurationSection sections,
-            boolean template) {
-        NiEvaluation active = NiEvaluation.current();
-        NiConfig nodes = sections == null ? new NiConfig(Map.of()) : NiYaml.fromSection(sections);
-        NiEvaluation evaluation = active.legacyContext(cache, player, nodes);
-        try {
-            if (template) return evaluation.text(text);
-            String result = evaluation.value(text);
-            return result == null ? "<" + text + ">" : result;
-        } finally {
-            if (cache != null && cache != evaluation.generation().rolls()) {
-                cache.clear();
-                cache.putAll(evaluation.generation().rolls());
-            }
-        }
+                        : host.legacyItemValue(type, text.substring(split + 2), item, nbt, data);
+        return result == null ? "<" + text + ">" : result;
     }
 }

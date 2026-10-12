@@ -2,6 +2,7 @@ package dev.itemloom.paper.sx;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
@@ -11,80 +12,92 @@ import java.util.Locale;
 import java.util.Map;
 import org.bukkit.Material;
 
-/** Fixed Paper 26.2 observations; no CraftLegacy/DFU call is made while generating an item. */
+/** Validated lookup data observed on the supported Paper release; no runtime legacy conversion. */
 final class LegacyMaterialTable {
-    private final Map<Integer, Variants> ids;
-    private final Map<String, Variants> names;
-
-    private LegacyMaterialTable(Map<Integer, Variants> ids, Map<String, Variants> names) {
-        this.ids = Map.copyOf(ids);
-        this.names = Map.copyOf(names);
-    }
+    private final Map<Integer, Material[]> ids = new HashMap<>();
+    private final Map<String, Material[]> names = new HashMap<>();
 
     static LegacyMaterialTable load() {
-        var stream =
-                LegacyMaterialTable.class.getResourceAsStream(
-                        "/compat-sx/legacy-materials-26.2.tsv");
-        if (stream == null)
-            throw new IllegalStateException("Missing Paper legacy material observations");
-        try (var reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
-            LegacyMaterialTable table = read(reader);
-            if (table.ids.size() != 463)
-                throw new IOException("Incomplete Paper legacy material observations");
+        String resource = "/compat-sx/legacy-materials-26.2.tsv";
+        try (InputStream stream = LegacyMaterialTable.class.getResourceAsStream(resource)) {
+            if (stream == null) {
+                throw new IOException("Missing " + resource);
+            }
+            LegacyMaterialTable table = read(new InputStreamReader(stream, StandardCharsets.UTF_8));
+            if (table.ids.size() != 463) {
+                throw new IOException("Expected 463 legacy keys, found " + table.ids.size());
+            }
             return table;
-        } catch (IOException | IllegalArgumentException error) {
-            throw new IllegalStateException("Invalid Paper legacy material observations", error);
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot load legacy material observations", error);
         }
     }
 
     static LegacyMaterialTable read(Reader source) throws IOException {
-        Map<Integer, Variants> ids = new HashMap<>();
-        Map<String, Variants> names = new HashMap<>();
-        var reader = new BufferedReader(source);
+        LegacyMaterialTable table = new LegacyMaterialTable();
+        BufferedReader reader =
+                source instanceof BufferedReader buffered ? buffered : new BufferedReader(source);
         String line;
+        int row = 0;
         while ((line = reader.readLine()) != null) {
-            if (line.isEmpty() || line.startsWith("#")) continue;
-            String[] fields = line.split("\t", -1);
-            if (fields.length < 3) throw new IOException("Incomplete material row");
-            int id = Integer.parseInt(fields[0]);
-            if (id < 0 || !fields[1].matches("[A-Z][A-Z0-9_]*"))
-                throw new IOException("Invalid legacy key");
-            int[] starts = new int[fields.length - 2];
-            Material[] materials = new Material[starts.length];
-            for (int i = 0; i < starts.length; i++) {
-                String[] entry = fields[i + 2].split("=", -1);
-                if (entry.length != 2) throw new IOException("Invalid variant entry");
-                int start = Integer.parseInt(entry[0]);
-                if ((i == 0 && start != 0) || (i > 0 && start <= starts[i - 1]) || start > 255)
-                    throw new IOException("Invalid variant range");
-                starts[i] = start;
-                Material material = entry[1].equals("-") ? null : Material.valueOf(entry[1]);
-                if (material != null
-                        && (material.isLegacy() || material.isAir() || !material.isItem()))
-                    throw new IOException("Invalid modern item material");
-                materials[i] = material;
+            row++;
+            if (line.isBlank() || line.startsWith("#")) {
+                continue;
             }
-            Variants variants = new Variants(starts, materials);
-            if (ids.putIfAbsent(id, variants) != null
-                    || names.putIfAbsent(fields[1], variants) != null)
-                throw new IOException("Duplicate legacy key");
+            try {
+                String[] columns = line.split("\t", -1);
+                if (columns.length < 3
+                        || !columns[0].matches("[0-9]+")
+                        || !columns[1].matches("[A-Z0-9_]+")) {
+                    throw new IllegalArgumentException("Invalid row header");
+                }
+                int id = Integer.parseInt(columns[0]);
+                Material[] data = new Material[256];
+                int previous = -1;
+                Material material = null;
+                for (int index = 2; index < columns.length; index++) {
+                    String[] boundary = columns[index].split("=", -1);
+                    if (boundary.length != 2 || !boundary[0].matches("[0-9]+")) {
+                        throw new IllegalArgumentException("Invalid data boundary");
+                    }
+                    int start = Integer.parseInt(boundary[0]);
+                    if (start > 255 || start <= previous || previous == -1 && start != 0) {
+                        throw new IllegalArgumentException("Unordered data boundary");
+                    }
+                    if (previous >= 0) {
+                        Arrays.fill(data, previous, start, material);
+                    }
+                    material = boundary[1].equals("-") ? null : Material.getMaterial(boundary[1]);
+                    if (!boundary[1].equals("-")
+                            && (material == null
+                                    || material.isLegacy()
+                                    || material.isAir()
+                                    || !material.isItem())) {
+                        throw new IllegalArgumentException("Invalid modern item " + boundary[1]);
+                    }
+                    previous = start;
+                }
+                Arrays.fill(data, previous, 256, material);
+                if (table.ids.putIfAbsent(id, data) != null
+                        || table.names.putIfAbsent(columns[1], data) != null) {
+                    throw new IllegalArgumentException("Duplicate legacy material");
+                }
+            } catch (RuntimeException error) {
+                throw new IOException("Invalid legacy material table row " + row, error);
+            }
         }
-        return new LegacyMaterialTable(ids, names);
+        return table;
     }
 
     Material byId(int id, int data) {
-        return resolve(ids.get(id), data);
+        return at(ids.get(id), data);
     }
 
     Material byName(String name, int data) {
-        return resolve(names.get(name.toUpperCase(Locale.ROOT)), data);
+        return at(names.get(name.toUpperCase(Locale.ROOT)), data);
     }
 
-    private static Material resolve(Variants variants, int data) {
-        if (variants == null || data < 0 || data > 255) return null;
-        int index = Arrays.binarySearch(variants.starts, data);
-        return variants.materials[index >= 0 ? index : -index - 2];
+    private static Material at(Material[] values, int data) {
+        return values == null || data < 0 || data > 255 ? null : values[data];
     }
-
-    private record Variants(int[] starts, Material[] materials) {}
 }

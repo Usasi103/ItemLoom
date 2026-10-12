@@ -1,39 +1,31 @@
 package dev.itemloom.paper.compat.script;
 
-import java.io.File;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import dev.itemloom.compat.ni.NiConfig;
 import dev.itemloom.compat.ni.NiYaml;
 import dev.itemloom.compat.ni.action.NiActionContext;
 import dev.itemloom.compat.ni.script.LegacyConfigReader;
 import dev.itemloom.core.ActionFlow;
-import dev.itemloom.paper.compat.NiItemOperations;
-import dev.itemloom.paper.compat.NiPaperRecipe;
+import dev.itemloom.paper.compat.*;
+import java.io.File;
+import java.util.*;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.inventory.ItemStack;
 
-/** A revision-bound script view of an independent compiled recipe. */
 public final class LegacyItemGenerator {
     private final NiItemOperations operations;
-    private final String id;
-    private final LegacyItemConfig itemConfig;
-    private final NiPaperRecipe compiled;
-    private final ActionFlow.Step<NiActionContext> postGenerate;
+    private final LegacyItemConfig origin;
+    private final NiPaperRecipe recipe;
+    private final ActionFlow.Step<NiActionContext> post;
 
     public LegacyItemGenerator(NiItemOperations operations, String id) {
-        this(operations.catalog().registry().generators().get(id));
-    }
-
-    private LegacyItemGenerator(LegacyItemGenerator source) {
-        this(
-                Objects.requireNonNull(source, "Unknown item").operations,
-                source.itemConfig,
-                source.compiled,
-                source.postGenerate);
+        this.operations = Objects.requireNonNull(operations);
+        operations.ensureActive();
+        LegacyItemGenerator registered = operations.catalog().registry().generators().get(id);
+        if (registered == null) throw new IllegalArgumentException("Unknown item: " + id);
+        origin = registered.origin;
+        recipe = registered.recipe;
+        post = registered.post;
     }
 
     public LegacyItemGenerator(
@@ -42,53 +34,47 @@ public final class LegacyItemGenerator {
             NiPaperRecipe compiled,
             ActionFlow.Step<NiActionContext> postGenerate) {
         this.operations = Objects.requireNonNull(operations);
-        this.itemConfig = Objects.requireNonNull(itemConfig);
-        this.id = itemConfig.getId();
-        this.compiled = Objects.requireNonNull(compiled);
-        this.postGenerate = postGenerate;
-    }
-
-    private NiPaperRecipe recipe() {
-        operations.ensureActive();
-        return compiled;
+        origin = Objects.requireNonNull(itemConfig);
+        recipe = Objects.requireNonNull(compiled);
+        post = postGenerate;
     }
 
     public boolean ownedBy(NiItemOperations owner) {
-        return operations.catalog() == owner.catalog();
+        return owner != null && owner.catalog() == operations.catalog();
     }
 
     public NiPaperRecipe compiledRecipe() {
-        return recipe();
+        operations.ensureActive();
+        return recipe;
     }
 
     public ActionFlow.Step<NiActionContext> postGenerate() {
         operations.ensureActive();
-        return postGenerate;
+        return post;
     }
 
     public LegacyItemConfig getItemConfig() {
-        return itemConfig;
+        return origin;
     }
 
     public File getFile() {
-        return itemConfig.getFile();
-    }
-
-    private NiConfig definition() {
-        return recipe().definition().definition();
+        return origin.getFile();
     }
 
     public String getId() {
-        return id;
+        return origin.getId();
     }
 
-    /** Recipe-owned mirror: live sections affect future generation, compiled fields remain fixed. */
     public ConfigurationSection getConfigSection() {
-        return recipe().legacyConfigSection();
+        return compiledRecipe().legacyConfigSection();
     }
 
     public ConfigurationSection getSections() {
-        return recipe().legacySections();
+        return compiledRecipe().legacySections();
+    }
+
+    private NiConfig definition() {
+        return compiledRecipe().definition().definition();
     }
 
     public boolean getUpdate() {
@@ -112,13 +98,16 @@ public final class LegacyItemGenerator {
     }
 
     public HashMap<String, String> getRebuildData() {
-        NiConfig source = getUpdate() ? definition().section("options.update.rebuild") : null;
-        if (source == null) return null;
+        if (!getUpdate()) return null;
+        NiConfig values = definition().section("options.update.rebuild");
+        if (values == null) return null;
         HashMap<String, String> result = new HashMap<>();
-        ConfigurationSection section = NiYaml.toSection(source);
-        for (String key : section.getKeys(true)) {
-            if (section.get(key) instanceof String value) result.put(key, value);
-        }
+        NiYaml.toSection(values)
+                .getValues(true)
+                .forEach(
+                        (key, value) -> {
+                            if (value instanceof String text) result.put(key, text);
+                        });
         return result;
     }
 
@@ -131,7 +120,7 @@ public final class LegacyItemGenerator {
     }
 
     public int getHashCode() {
-        return recipe().definitionHash();
+        return compiledRecipe().definitionHash();
     }
 
     public ItemStack getItemStack(OfflinePlayer player, String data) {

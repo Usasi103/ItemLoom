@@ -1,78 +1,105 @@
 package dev.itemloom.paper.sx;
 
-import java.util.HashSet;
+import dev.itemloom.paper.runtime.UpdateQueueAccess;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.inventory.ItemStack;
 
-/** SX updates are queued by inventory activity, rather than polling every slot every tick. */
+/** Event-fed inventory work, bound to the revision capability captured for each batch. */
 public final class SxMaintenance implements Listener {
-    private final Supplier<SxCatalog> current;
+    private final Supplier<UpdateQueueAccess> current;
     private final Logger logger;
-    private final Set<UUID> pending = new HashSet<>();
+    private final Set<UUID> pending = new LinkedHashSet<>();
     private int ticks;
+    private boolean closed;
     private long lastWarning;
+    private boolean warned;
 
-    public SxMaintenance(Supplier<SxCatalog> current, Logger logger) {
+    public SxMaintenance(Supplier<UpdateQueueAccess> current, Logger logger) {
         this.current = current;
         this.logger = logger;
     }
 
-    private void queue(Player player) {
-        SxCatalog catalog = current.get();
-        if (catalog != null && catalog.hasUpdates()) pending.add(player.getUniqueId());
-    }
-
     public void refresh() {
         pending.clear();
-        Bukkit.getOnlinePlayers().forEach(this::queue);
+        if (enabled()) {
+            Bukkit.getOnlinePlayers().forEach(player -> pending.add(player.getUniqueId()));
+        }
     }
 
     @EventHandler
     public void join(PlayerJoinEvent event) {
-        queue(event.getPlayer());
+        enqueue(event.getPlayer());
     }
 
     @EventHandler
     public void held(PlayerItemHeldEvent event) {
-        queue(event.getPlayer());
+        enqueue(event.getPlayer());
     }
 
     @EventHandler
     public void open(InventoryOpenEvent event) {
-        if (event.getPlayer() instanceof Player player) queue(player);
+        if (event.getPlayer() instanceof Player player) {
+            enqueue(player);
+        }
+    }
+
+    private void enqueue(Player player) {
+        if (enabled()) {
+            pending.add(player.getUniqueId());
+        }
+    }
+
+    private boolean enabled() {
+        UpdateQueueAccess catalog = closed ? null : current.get();
+        return catalog != null && catalog.hasUpdates();
     }
 
     public void tick() {
-        if (++ticks < 20) return;
-        ticks = 0;
-        SxCatalog catalog = current.get();
-        if (catalog == null || !catalog.hasUpdates()) {
+        UpdateQueueAccess owner = closed ? null : current.get();
+        if (owner == null || !owner.hasUpdates()) {
             pending.clear();
             return;
         }
-        Set<UUID> batch = Set.copyOf(pending);
+        if (++ticks < 20) {
+            return;
+        }
+        ticks = 0;
+        var batch = new ArrayList<>(pending);
         pending.clear();
         for (UUID id : batch) {
+            if (current.get() != owner) {
+                return;
+            }
             Player player = Bukkit.getPlayer(id);
-            if (player == null) continue;
-            for (var item : player.getInventory().getContents()) {
-                if (current.get() != catalog) return;
+            if (player == null || !player.isOnline()) {
+                continue;
+            }
+            for (ItemStack item : player.getInventory().getContents()) {
+                if (closed || current.get() != owner) {
+                    return;
+                }
                 try {
-                    catalog.update(player, item);
+                    owner.update(player, item);
                 } catch (RuntimeException error) {
                     long now = System.nanoTime();
-                    if (now - lastWarning >= 10_000_000_000L) {
+                    if (!warned || now - lastWarning >= 10_000_000_000L) {
+                        logger.log(Level.WARNING, "SX automatic item update failed", error);
                         lastWarning = now;
-                        logger.warning("SX item update failed: " + error.getMessage());
+                        warned = true;
                     }
                 }
             }
@@ -80,7 +107,8 @@ public final class SxMaintenance implements Listener {
     }
 
     public void close() {
+        closed = true;
         pending.clear();
-        org.bukkit.event.HandlerList.unregisterAll(this);
+        HandlerList.unregisterAll(this);
     }
 }

@@ -1,62 +1,51 @@
 package dev.itemloom.compat.ni;
 
-import java.util.ArrayDeque;
-import java.util.List;
+import java.util.*;
 
-/** The fastcalc arithmetic language; no script engine or server globals are involved. */
 final class NiArithmetic {
     private NiArithmetic() {}
 
     static double evaluate(String source) {
-        List<String> tokens = NiFormulaTokens.parse(source);
-        ArrayDeque<Character> operators = new ArrayDeque<>();
         ArrayDeque<Double> values = new ArrayDeque<>();
-        for (String token : tokens) {
-            if (token.length() != 1 || "+-*/%^()".indexOf(token.charAt(0)) < 0) {
-                values.push(Double.valueOf(token));
-                continue;
-            }
-            char operator = token.charAt(0);
-            if (operator == '(') operators.push(operator);
-            else if (operator == ')') {
-                while (!operators.isEmpty() && operators.peek() != '(')
-                    apply(operators.pop(), values);
+        ArrayDeque<String> operators = new ArrayDeque<>();
+        for (String token : NiFormulaTokens.parse(source)) {
+            if (token.equals("(")) operators.push(token);
+            else if (token.equals(")")) {
+                while (!operators.isEmpty() && !operators.peek().equals("("))
+                    apply(values, operators.pop());
                 if (operators.isEmpty())
-                    throw new IllegalArgumentException("Unmatched ')' in fastcalc");
+                    throw new IllegalArgumentException("Unmatched right parenthesis");
                 operators.pop();
-            } else {
+            } else if (token.length() == 1 && "+-*/%^".contains(token)) {
                 while (!operators.isEmpty()
-                        && operators.peek() != '('
-                        && operator != '^'
-                        && priority(operators.peek()) >= priority(operator))
-                    apply(operators.pop(), values);
-                operators.push(operator);
-            }
+                        && !operators.peek().equals("(")
+                        && (rank(operators.peek()) > rank(token)
+                                || rank(operators.peek()) == rank(token) && !token.equals("^")))
+                    apply(values, operators.pop());
+                operators.push(token);
+            } else values.push(Double.parseDouble(token));
         }
-        while (!operators.isEmpty()) apply(operators.pop(), values);
-        if (values.isEmpty()) throw new IllegalArgumentException("Empty fastcalc expression");
+        while (!operators.isEmpty()) apply(values, operators.pop());
+        if (values.isEmpty()) throw new IllegalArgumentException("Empty arithmetic expression");
         return values.pop();
     }
 
-    private static int priority(char value) {
-        return value == '^' ? 3 : "*/%".indexOf(value) >= 0 ? 2 : 1;
+    private static int rank(String operator) {
+        return operator.equals("^") ? 3 : "*/%".contains(operator) ? 2 : 1;
     }
 
-    private static void apply(char operator, ArrayDeque<Double> values) {
-        double right = values.isEmpty() ? 0 : values.pop(),
-                left = values.isEmpty() ? 0 : values.pop();
-        values.push(
+    private static void apply(ArrayDeque<Double> stack, String operator) {
+        double right = stack.isEmpty() ? 0 : stack.pop();
+        double left = stack.isEmpty() ? 0 : stack.pop();
+        stack.push(
                 switch (operator) {
-                    case '+' -> left + right;
-                    case '-' -> left - right;
-                    case '*' -> left * right;
-                    case '/' -> left / right;
-                    case '%' -> left % right;
-                    case '^' -> Math.pow(left, right);
-                    case '(' -> 0D;
-                    default ->
-                            throw new IllegalArgumentException(
-                                    "Unknown fastcalc operator: " + operator);
+                    case "+" -> left + right;
+                    case "-" -> left - right;
+                    case "*" -> left * right;
+                    case "/" -> left / right;
+                    case "%" -> left % right;
+                    case "^" -> Math.pow(left, right);
+                    default -> 0.0;
                 });
     }
 }

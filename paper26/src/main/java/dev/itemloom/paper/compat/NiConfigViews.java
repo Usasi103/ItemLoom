@@ -1,49 +1,45 @@
 package dev.itemloom.paper.compat;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import dev.itemloom.compat.ni.NiConfig;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
-/** Mutable script views of immutable frontend data, without reparsing YAML or evaluating nodes. */
 public final class NiConfigViews {
     private NiConfigViews() {}
 
-    public static Map<String, Object> map(NiConfig source) {
-        return copyMap(source.values());
+    public static Map<String, Object> map(NiConfig config) {
+        return copy(config.values());
     }
 
-    public static ConfigurationSection section(NiConfig source) {
-        ConfigurationSection target = new YamlConfiguration();
-        fill(target, source.values());
-        return target;
-    }
-
-    private static Map<String, Object> copyMap(Map<?, ?> source) {
-        Map<String, Object> copy = new LinkedHashMap<>();
-        source.forEach((key, child) -> copy.put(key.toString(), mutable(child)));
-        return copy;
+    private static Map<String, Object> copy(Map<?, ?> source) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, value) -> result.put(String.valueOf(key), mutable(value)));
+        return result;
     }
 
     private static Object mutable(Object value) {
-        if (value instanceof Map<?, ?> map) return copyMap(map);
+        if (value instanceof Map<?, ?> map) return copy(map);
         if (value instanceof List<?> list) {
-            List<Object> copy = new ArrayList<>(list.size());
-            list.forEach(child -> copy.add(mutable(child)));
-            return copy;
+            List<Object> result = new ArrayList<>();
+            list.forEach(child -> result.add(mutable(child)));
+            return result;
         }
         return value;
+    }
+
+    public static ConfigurationSection section(NiConfig config) {
+        YamlConfiguration result = new YamlConfiguration();
+        fill(result, config.values());
+        return result;
     }
 
     private static void fill(ConfigurationSection target, Map<?, ?> source) {
         source.forEach(
                 (key, value) -> {
-                    if (value instanceof Map<?, ?> map)
-                        fill(target.createSection(key.toString()), map);
-                    else target.set(key.toString(), mutable(value));
+                    String name = String.valueOf(key);
+                    if (value instanceof Map<?, ?> map) fill(target.createSection(name), map);
+                    else target.set(name, mutable(value));
                 });
     }
 }

@@ -46,8 +46,14 @@ final class NbtProbe {
             String kind = craft ? "craft" : "bukkit";
             checks.group(kind + "/projection", () -> projection(checks, fixture(craft)));
             checks.group(kind + "/rollback", () -> rollback(checks, fixture(craft)));
+            for (String invalid : List.of("schema", "rolls", "conflicting-identities")) {
+                checks.group(
+                        kind + "/existing-" + invalid,
+                        () -> invalidExistingState(checks, fixture(craft), invalid));
+            }
             checks.group(kind + "/multiple-views", () -> multipleViews(checks, fixture(craft)));
             checks.group(kind + "/children", () -> children(checks, fixture(craft)));
+            checks.group(kind + "/sublist-batches", () -> sublistBatches(checks, fixture(craft)));
             checks.group(kind + "/arrays", () -> arrays(checks, fixture(craft)));
             checks.group(kind + "/copies", () -> copies(checks, fixture(craft)));
             checks.group(kind + "/compound-rolls", () -> compoundRolls(checks, craft));
@@ -120,6 +126,47 @@ final class NbtProbe {
                 new NiItemMigration().convert(empty).isEmpty()
                         && CraftItemStack.unwrap(empty).get(DataComponents.CUSTOM_DATA) == null,
                 "empty item migration does not attach custom_data");
+    }
+
+    private static void invalidExistingState(Checks check, Fixture fixture, String invalid) {
+        ItemStack item = fixture.item;
+        LegacyNbtItemStack wrapper = new LegacyNbtItemStack(item);
+        LegacyNbt.Compound held = wrapper.getTag();
+        CompoundTag raw = NmsItems.customData(item);
+        CompoundTag identity = raw.getCompoundOrEmpty(ItemStateCodec.KEY);
+        switch (invalid) {
+            case "schema" -> identity.putInt("schema", 2);
+            case "rolls" -> identity.getCompoundOrEmpty("rolls").putInt("invalid", 7);
+            case "conflicting-identities" -> {
+                CompoundTag legacy = new CompoundTag();
+                legacy.putString("id", "different-identity");
+                legacy.putString("data", "{}");
+                raw.put(OLD_KEY, legacy);
+            }
+            default -> throw new AssertionError(invalid);
+        }
+        CraftItemStack.unwrap(item).set(DataComponents.CUSTOM_DATA, CustomData.of(raw));
+        rejectUnchanged(
+                check,
+                item,
+                held,
+                wrapper::getTag,
+                IllegalArgumentException.class,
+                "reading an invalid existing identity fails without changing the item");
+        rejectUnchanged(
+                check,
+                item,
+                held,
+                () -> wrapper.setTag(new LegacyNbt.Compound()),
+                IllegalArgumentException.class,
+                "explicit tag replacement cannot silently erase an invalid existing identity");
+        rejectUnchanged(
+                check,
+                item,
+                held,
+                () -> held.putString("probe", "changed"),
+                IllegalArgumentException.class,
+                "a retained live view cannot overwrite an identity invalidated by another writer");
     }
 
     private static void projection(Checks check, Fixture fixture) {
@@ -362,6 +409,58 @@ final class NbtProbe {
         return NmsItems.customData(item).getCompoundOrEmpty("attached").getListOrEmpty("rows");
     }
 
+    private static void sublistBatches(Checks check, Fixture fixture) {
+        ItemStack item = fixture.item;
+        LegacyNbt.Compound root = new LegacyNbtItemStack(item).getTag();
+        LegacyNbt.ListValue rows = root.getOrCreateList("rows");
+        rows.addEmptyCompound().putInt("value", 1);
+        rows.addEmptyCompound().putInt("value", 2);
+        List<LegacyNbt> insertion = rows.subList(0, 2).subList(1, 1);
+        LegacyNbt.Compound candidate = new LegacyNbt.Compound();
+        candidate.putInt("value", 5);
+        List<LegacyNbt> invalid = Arrays.asList(candidate, null);
+        rejectUnchanged(
+                check,
+                item,
+                root,
+                () -> insertion.addAll(invalid),
+                NullPointerException.class,
+                "sublist append rejects an invalid batch without changing local or live data");
+        rejectUnchanged(
+                check,
+                item,
+                root,
+                () -> insertion.addAll(0, invalid),
+                NullPointerException.class,
+                "indexed sublist insertion rejects an invalid batch without changing local or live data");
+        Tag liveBefore = full(item);
+        CompoundTag localBefore = root.copyTag();
+        candidate.putInt("value", 6);
+        check.that(
+                full(item).equals(liveBefore)
+                        && root.copyTag().equals(localBefore)
+                        && insertion.isEmpty(),
+                "rejected sublist batches neither adopt candidates nor change the retained view size");
+        check.that(
+                insertion.addAll(List.of(candidate, candidate)),
+                "a retained nested sublist accepts a valid batch after rejection");
+        candidate.putInt("value", 7);
+        var liveRows = NmsItems.customData(item).getListOrEmpty("rows");
+        check.that(
+                insertion.size() == 2
+                        && rows.size() == 4
+                        && rows.get(1) == candidate
+                        && rows.get(2) != candidate
+                        && rows.getCompound(2).getInt("value") == 6
+                        && liveRows.size() == 4
+                        && liveRows.getCompoundOrEmpty(0).getIntOr("value", -1) == 1
+                        && liveRows.getCompoundOrEmpty(1).getIntOr("value", -1) == 7
+                        && liveRows.getCompoundOrEmpty(2).getIntOr("value", -1) == 6
+                        && liveRows.getCompoundOrEmpty(3).getIntOr("value", -1) == 2,
+                "sublist batches preserve the insertion offset and adopt only the first repeated child");
+        preserved(check, fixture);
+    }
+
     private static void arrays(Checks check, Fixture fixture) {
         ItemStack item = fixture.item;
         LegacyNbt.Compound root = new LegacyNbtItemStack(item).getTag();
@@ -411,9 +510,39 @@ final class NbtProbe {
                 UnsupportedOperationException.class,
                 () -> longView.remove(0),
                 "long array removal is explicitly unsupported");
+        check.reject(
+                UnsupportedOperationException.class,
+                () -> byteView.addAll(List.of((byte) 4, (byte) 5)),
+                "byte array bulk insertion remains unsupported");
+        check.reject(
+                UnsupportedOperationException.class,
+                () -> intView.subList(1, 1).addAll(List.of(4, 5)),
+                "int array sublist bulk insertion remains unsupported");
+        check.reject(
+                UnsupportedOperationException.class,
+                () -> longView.subList(1, 1).addAll(0, List.of(4L, 5L)),
+                "long array indexed sublist bulk insertion remains unsupported");
         check.that(
-                full(item).equals(before),
-                "rejected primitive-array operations leave the stack unchanged");
+                !byteView.addAll(List.of())
+                        && !intView.addAll(1, List.of())
+                        && !longView.subList(1, 1).addAll(List.of()),
+                "empty primitive-array batches remain harmless no-ops");
+        check.reject(
+                IndexOutOfBoundsException.class,
+                () -> byteView.addAll(4, List.of()),
+                "empty primitive-array batches still validate the insertion index");
+        check.that(
+                full(item).equals(before)
+                        && Arrays.equals(
+                                byteView.getAsByteArray(),
+                                new byte[] {Byte.MIN_VALUE, 0, Byte.MAX_VALUE})
+                        && Arrays.equals(
+                                intView.getAsIntArray(),
+                                new int[] {Integer.MIN_VALUE, 0, Integer.MAX_VALUE})
+                        && Arrays.equals(
+                                longView.getAsLongArray(),
+                                new long[] {Long.MIN_VALUE, 0, Long.MAX_VALUE}),
+                "rejected primitive-array operations leave local buffers and the stack unchanged");
         root.putLongArray("longs", new long[] {4, 5});
         check.that(
                 Arrays.equals(

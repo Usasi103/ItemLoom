@@ -705,11 +705,16 @@ final class ReturnLedgerProbe {
                         EXPANSION,
                         StandardCharsets.UTF_8);
                 service = new ItemsService(plugin, inputRoot, (viewer, text) -> null, file);
-                if (!service.reload(null))
-                    throw new AssertionError("Service ledger fixture did not reload");
-                state = field(service, "players", PlayerActionState.class);
-                catalog = activeCatalog(service);
-                revisions.add(catalog);
+                try {
+                    if (!service.reload(null))
+                        throw new AssertionError("Service ledger fixture did not reload");
+                    state = field(service, "players", PlayerActionState.class);
+                    catalog = activeCatalog(service);
+                    revisions.add(catalog);
+                } catch (RuntimeException | Error failure) {
+                    service.close();
+                    throw failure;
+                }
             } else {
                 service = null;
                 state = new PlayerActionState();
@@ -999,13 +1004,9 @@ final class ReturnLedgerProbe {
     }
 
     private static NiCatalog activeCatalog(ItemsService service) {
-        try {
-            var method = ItemsService.class.getDeclaredMethod("activeNi");
-            method.setAccessible(true);
-            return (NiCatalog) method.invoke(service);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError("Cannot inspect service-owned catalog fixture", failure);
-        }
+        var installed =
+                field(service, "installed", dev.itemloom.paper.runtime.PreparedRuntime.class);
+        return field(installed, "ni", NiCatalog.class);
     }
 
     private static <T> T field(Object target, String name, Class<T> type) {

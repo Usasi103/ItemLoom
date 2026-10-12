@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import dev.itemloom.compat.ni.NiCompiledItem;
 import dev.itemloom.compat.ni.NiConfig;
 import dev.itemloom.compat.ni.NiEvaluation;
@@ -60,7 +61,7 @@ final class GenerationPlanProbe {
                 name: '&a<papi::same>'
                 lore: ['&7Fixed lore', '&bSecond line']
                 options: {durability: 10, item-time: 60}
-                static: {unbreakable: true, nbt: {external: {keep: yes}}}
+                static: {unbreakable: true, item-name: 'Static item name', nbt: {external: {keep: yes}}}
                 components: {enchantment_glint_override: true}
                 """);
         ItemStack first = null;
@@ -112,6 +113,49 @@ final class GenerationPlanProbe {
                         && identity.rolls().containsKey("null")
                         && identity.rolls().get("null") == null,
                 "per-request saved rolls including nulls remain independent");
+        var nameStyle = fresh.get(DataComponents.CUSTOM_NAME).getStyle();
+        var itemNameStyle = fresh.get(DataComponents.ITEM_NAME).getStyle();
+        var loreStyle = fresh.get(DataComponents.LORE).lines().getFirst().getStyle();
+        ((MutableComponent) fresh.get(DataComponents.CUSTOM_NAME))
+                .setStyle(nameStyle.withBold(!nameStyle.isBold()));
+        ((MutableComponent) fresh.get(DataComponents.ITEM_NAME))
+                .setStyle(itemNameStyle.withBold(!itemNameStyle.isBold()));
+        ((MutableComponent) fresh.get(DataComponents.LORE).lines().getFirst())
+                .setStyle(loreStyle.withBold(!loreStyle.isBold()));
+        var isolated = CraftItemStack.unwrap(f.create(recipe, Map.of()));
+        check(
+                c,
+                cached(recipe) == cached
+                        && isolated.get(DataComponents.CUSTOM_NAME).getStyle().equals(nameStyle)
+                        && isolated.get(DataComponents.ITEM_NAME).getStyle().equals(itemNameStyle)
+                        && isolated.get(DataComponents.LORE)
+                                .lines()
+                                .getFirst()
+                                .getStyle()
+                                .equals(loreStyle)
+                        && isolated.get(DataComponents.CUSTOM_NAME).getString().equals("same")
+                        && isolated.get(DataComponents.ITEM_NAME)
+                                .getString()
+                                .equals("Static item name")
+                        && isolated.get(DataComponents.LORE)
+                                .lines()
+                                .getFirst()
+                                .getString()
+                                .equals("Fixed lore"),
+                "in-place name and lore changes cannot poison cached or static components");
+
+        NiPaperRecipe staticTime =
+                f.recipe("static-time", "material: STONE\nstatic: {options: {item-time: 30}}\n");
+        for (int i = 0; i < 4; i++) f.create(staticTime, Map.of());
+        Object staticPlan = cached(staticTime);
+        f.clock.time = 20_000;
+        ItemStack later = f.create(staticTime, Map.of());
+        check(
+                c,
+                staticPlan != null
+                        && cached(staticTime) == staticPlan
+                        && firstState.properties(later).getLong("itemTime").orElseThrow() == 50_000,
+                "static options recompute their lifetime on an appearance cache hit");
 
         NiPaperRecipe dynamic =
                 f.recipe(

@@ -4,46 +4,42 @@ import java.util.Locale;
 import java.util.function.BiFunction;
 import java.util.regex.Pattern;
 
-/** Percent-token grammar for the script item expansion boundary. */
 public final class LegacyPercentText {
-    private static final Pattern FORMATTING = Pattern.compile("\u00a7+[a-z0-9]");
+    public record Result(String text, boolean changed) {}
+
+    private static final Pattern COLORS = Pattern.compile("§+[a-z0-9]");
 
     private LegacyPercentText() {}
 
-    public record Result(String text, boolean changed) {}
-
-    /** The callback performs a live lookup; null means retain the original token. */
     public static Result parse(String text, BiFunction<String, String, String> expand) {
-        StringBuilder output = new StringBuilder(text.length());
-        int search = 0;
-        int retainedFrom = 0;
+        StringBuilder result = new StringBuilder();
+        int scan = 0, copied = 0;
         boolean changed = false;
-        while (search < text.length()) {
-            int opening = text.indexOf('%', search);
-            if (opening < 0) break;
-            int closing = text.indexOf('%', opening + 1);
-            if (closing < 0) break;
-            String candidate = text.substring(opening + 1, closing);
-            int underscore = candidate.indexOf('_');
-            int identifierEnd = underscore < 0 ? candidate.length() : underscore;
-            int space = candidate.indexOf(' ');
-            if (space >= 0 && space < identifierEnd) {
-                search = closing;
+        while (scan < text.length()) {
+            int open = text.indexOf('%', scan);
+            if (open < 0) break;
+            int close = text.indexOf('%', open + 1);
+            if (close < 0) break;
+            String body = text.substring(open + 1, close);
+            int underscore = body.indexOf('_');
+            String id = underscore < 0 ? body : body.substring(0, underscore);
+            if (id.indexOf(' ') >= 0) {
+                scan = close;
                 continue;
             }
-            String identifier =
-                    candidate.substring(0, identifierEnd).toLowerCase(Locale.getDefault());
-            identifier = FORMATTING.matcher(identifier).replaceAll("");
-            String parameters = underscore < 0 ? "" : candidate.substring(underscore + 1);
-            String replacement = expand.apply(identifier, parameters);
-            if (replacement != null) {
-                output.append(text, retainedFrom, opening).append(replacement);
-                retainedFrom = closing + 1;
+            String parameters = underscore < 0 ? "" : body.substring(underscore + 1);
+            id = COLORS.matcher(id.toLowerCase(Locale.getDefault())).replaceAll("");
+            String replacement = expand.apply(id, parameters);
+            result.append(text, copied, open);
+            if (replacement == null) result.append(text, open, close + 1);
+            else {
+                result.append(replacement);
                 changed = true;
             }
-            search = closing + 1;
+            copied = close + 1;
+            scan = copied;
         }
         if (!changed) return new Result(text, false);
-        return new Result(output.append(text, retainedFrom, text.length()).toString(), true);
+        return new Result(result.append(text, copied, text.length()).toString(), true);
     }
 }

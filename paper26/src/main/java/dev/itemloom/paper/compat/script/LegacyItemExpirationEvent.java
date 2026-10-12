@@ -8,7 +8,6 @@ import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.bukkit.inventory.ItemStack;
 
-/** The NI script event contract, implemented entirely by ItemLoom. */
 public final class LegacyItemExpirationEvent extends Event implements Cancellable {
     private static final HandlerList HANDLERS = new HandlerList();
     private final OfflinePlayer player;
@@ -20,8 +19,8 @@ public final class LegacyItemExpirationEvent extends Event implements Cancellabl
             OfflinePlayer player, ItemStack itemStack, LegacyItemInfo itemInfo) {
         super(!Bukkit.isPrimaryThread());
         this.player = player;
-        this.itemStack = Objects.requireNonNull(itemStack);
-        this.itemInfo = Objects.requireNonNull(itemInfo);
+        this.itemStack = Objects.requireNonNull(itemStack, "itemStack");
+        this.itemInfo = Objects.requireNonNull(itemInfo, "itemInfo");
     }
 
     public OfflinePlayer getPlayer() {

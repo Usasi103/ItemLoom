@@ -1,7 +1,7 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.Map;
 import java.util.Objects;
+import java.util.Map;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.event.Cancellable;
@@ -9,7 +9,6 @@ import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.bukkit.inventory.ItemStack;
 
-/** Script event aliases with independent Java types and the historical two update gates. */
 public final class LegacyItemUpdateEvent {
     private LegacyItemUpdateEvent() {}
 
@@ -28,9 +27,9 @@ public final class LegacyItemUpdateEvent {
                 LegacyItemGenerator item) {
             super(!Bukkit.isPrimaryThread());
             this.player = player;
-            this.oldItem = Objects.requireNonNull(oldItem);
-            this.data = Objects.requireNonNull(data);
-            this.item = Objects.requireNonNull(item);
+            this.oldItem = Objects.requireNonNull(oldItem, "oldItem");
+            this.data = Objects.requireNonNull(data, "data");
+            this.item = Objects.requireNonNull(item, "item");
         }
 
         public OfflinePlayer getPlayer() {
@@ -84,8 +83,8 @@ public final class LegacyItemUpdateEvent {
         public PostGenerate(OfflinePlayer player, ItemStack oldItem, ItemStack newItem) {
             super(!Bukkit.isPrimaryThread());
             this.player = player;
-            this.oldItem = Objects.requireNonNull(oldItem);
-            this.newItem = Objects.requireNonNull(newItem);
+            this.oldItem = Objects.requireNonNull(oldItem, "oldItem");
+            this.newItem = Objects.requireNonNull(newItem, "newItem");
         }
 
         public OfflinePlayer getPlayer() {

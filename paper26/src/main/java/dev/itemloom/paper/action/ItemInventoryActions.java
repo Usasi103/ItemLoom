@@ -1,40 +1,43 @@
 package dev.itemloom.paper.action;
 
-import java.util.logging.Logger;
-import dev.itemloom.compat.ni.action.NiValues;
 import dev.itemloom.core.ActionFlow.Result;
-import dev.itemloom.paper.compat.NiItemNodes;
+import dev.itemloom.paper.nms.ItemStateCodec;
+import java.math.BigInteger;
+import java.util.logging.Logger;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-/** NI take-ni-item contract, accepting both the independent and legacy item identities. */
 final class ItemInventoryActions {
     private ItemInventoryActions() {}
 
     static Result take(Player player, String content, Logger logger) {
-        if (player == null) return Result.CONTINUE;
-        String[] args = content.split(" ", 2);
-        if (args.length < 2) return Result.CONTINUE;
-        Integer parsed = NiValues.strictInteger(args[1]);
-        int remaining = parsed == null ? 0 : parsed;
-        // NI accidentally increased the first matching stack for a negative amount.
-        // This explicitly rejected input must never mint items in the independent engine.
-        if (remaining < 0) {
-            logger.warning("Action take-ni-item rejected negative amount: " + content);
+        if (player == null || content == null) return Result.CONTINUE;
+        int split = content.indexOf(' ');
+        if (split < 0) return Result.CONTINUE;
+        String id = content.substring(0, split);
+        int requested = quantity(content.substring(split + 1));
+        if (requested < 0) {
+            logger.warning("take-ni-item rejected negative amount: " + content);
             return Result.STOP;
         }
-        if (remaining == 0) return Result.CONTINUE;
-        var inventory = player.getInventory();
-        ItemStack[] contents = inventory.getContents();
-        for (int slot = 0; slot < contents.length && remaining > 0; slot++) {
+        ItemStateCodec codec = new ItemStateCodec();
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length && requested > 0; slot++) {
             ItemStack item = contents[slot];
-            if (!args[0].equals(NiItemNodes.itemId(item))) continue;
-            int removed = Math.min(remaining, item.getAmount());
-            remaining -= removed;
+            if (item == null || item.isEmpty() || !id.equals(codec.readId(item))) continue;
+            int removed = Math.min(requested, item.getAmount());
+            requested -= removed;
             item.setAmount(item.getAmount() - removed);
-            inventory.setItem(slot, item.isEmpty() ? null : item);
+            player.getInventory().setItem(slot, item.isEmpty() ? null : item);
         }
-        // The old action consumes all matches even when fewer than requested exist.
         return Result.CONTINUE;
+    }
+
+    private static int quantity(String value) {
+        if (!value.matches("[+-]?[0-9]+")) return 0;
+        BigInteger parsed = new BigInteger(value);
+        if (parsed.compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) return Integer.MAX_VALUE;
+        if (parsed.compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0) return Integer.MIN_VALUE;
+        return parsed.intValue();
     }
 }

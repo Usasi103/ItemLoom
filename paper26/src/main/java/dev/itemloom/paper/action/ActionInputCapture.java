@@ -1,19 +1,21 @@
 package dev.itemloom.paper.action;
 
+import dev.itemloom.compat.ni.NiTemplate;
+import dev.itemloom.compat.ni.action.NiActionContext;
+import dev.itemloom.core.ActionFlow.Result;
 import dev.keystone.ui.SignInput;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import dev.itemloom.compat.ni.NiTemplate;
-import dev.itemloom.compat.ni.action.NiActionContext;
-import dev.itemloom.core.ActionFlow.Result;
+import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -23,22 +25,19 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/**
- * Revision-owned NI chat/sign catcher queues. Keystone owns the virtual sign protocol.
- * Only the queue is locked; completing futures can execute scripts and always happens outside it.
- */
-@SuppressWarnings("deprecation")
 public final class ActionInputCapture implements Listener, AutoCloseable {
     private final JavaPlugin plugin;
     private final ActionTasks tasks;
     private final PlayerActionState players;
-    private final Map<UUID, Captures> pending = new HashMap<>();
-    // Uses the same monitor as chat so quit/close fence both inputs atomically.
-    private final Map<UUID, SignCaptures> signs = new HashMap<>();
+    private final Object monitor = new Object();
+    private final Map<UUID, Mailbox> chat = new HashMap<>();
+    private final Map<UUID, Mailbox> signs = new HashMap<>();
+    private final Set<Waiter> unsettled = new LinkedHashSet<>();
     private final Set<UUID> quitting = new HashSet<>();
-    private volatile boolean closed;
+    private boolean closed;
 
     ActionInputCapture(JavaPlugin plugin, ActionTasks tasks, PlayerActionState players) {
         this.plugin = plugin;
@@ -48,284 +47,265 @@ public final class ActionInputCapture implements Listener, AutoCloseable {
     }
 
     CompletionStage<Result> capture(String content, NiActionContext context) {
-        Player player = context.getPlayer();
-        if (player == null || !player.isOnline() || !players.contains(player.getUniqueId()))
-            return completed(Result.CONTINUE);
-        List<String> args = NiTemplate.split(content, ' ', 0);
-        String key = args.isEmpty() ? "catchChat" : args.getFirst();
-        boolean cancel = args.size() < 2 || !args.get(1).equals("false");
-        Capture capture = new Capture(player.getUniqueId(), context, key, cancel);
-        synchronized (pending) {
-            if (closed || !tasks.active() || !context.active() || quitting.contains(capture.player))
-                return completed(Result.STOP);
-            if (!player.isOnline() || !players.contains(capture.player))
-                return completed(Result.CONTINUE);
-            Captures captures = pending.computeIfAbsent(capture.player, ignored -> new Captures());
-            captures.queue.addLast(capture);
-            captures.all.add(capture);
-        }
-        capture.result.whenComplete(
-                (value, error) -> {
-                    synchronized (pending) {
-                        Captures captures = pending.get(capture.player);
-                        if (captures == null) return;
-                        captures.queue.remove(capture);
-                        captures.all.remove(capture);
-                        if (captures.all.isEmpty()) pending.remove(capture.player);
-                    }
-                });
-        return capture.result;
+        List<String> words = NiTemplate.split(content, ' ', 0);
+        String key = words.isEmpty() ? "catchChat" : words.getFirst();
+        boolean cancel = words.size() < 2 || !words.get(1).equals("false");
+        return enroll(context, key, cancel, false);
     }
 
-    CompletionStage<Result> captureSign(String content, NiActionContext context) {
+    CompletionStage<Result> captureSign(String key, NiActionContext context) {
+        return enroll(context, key, true, true);
+    }
+
+    private CompletionStage<Result> enroll(
+            NiActionContext context, String key, boolean cancel, boolean sign) {
         Player player = context.getPlayer();
-        if (player == null || !player.isOnline() || !players.contains(player.getUniqueId()))
-            return completed(Result.CONTINUE);
-        // NI uses the complete, already parsed content verbatim, including spaces or "".
-        Capture capture = new Capture(player.getUniqueId(), context, content, false);
-        SignCaptures captures;
-        synchronized (pending) {
-            if (closed || !tasks.active() || !context.active() || quitting.contains(capture.player))
-                return completed(Result.STOP);
-            if (!player.isOnline() || !players.contains(capture.player))
-                return completed(Result.CONTINUE);
-            captures = signs.computeIfAbsent(capture.player, ignored -> new SignCaptures());
-            captures.queue.addLast(capture);
-            captures.all.add(capture);
+        if (!eligible(player)) return CompletableFuture.completedFuture(Result.CONTINUE);
+        Waiter request;
+        Mailbox mailbox;
+        synchronized (monitor) {
+            if (closed
+                    || !tasks.active()
+                    || !context.active()
+                    || quitting.contains(player.getUniqueId())) {
+                return CompletableFuture.completedFuture(Result.STOP);
+            }
+            if (!eligible(player)) return CompletableFuture.completedFuture(Result.CONTINUE);
+            request = new Waiter(player.getUniqueId(), context, key, cancel);
+            mailbox =
+                    (sign ? signs : chat).computeIfAbsent(request.player, ignored -> new Mailbox());
+            mailbox.queue.addLast(request);
+            unsettled.add(request);
         }
-        capture.result.whenComplete(
-                (value, error) -> {
-                    synchronized (pending) {
-                        captures.queue.remove(capture);
-                        captures.all.remove(capture);
-                        discardFinishedSigns(capture.player, captures);
-                    }
-                });
-        // Every catch opens immediately on the main thread, even when another FIFO entry
-        // is already waiting. A submission still completes just the oldest entry.
-        tasks.schedule(
-                        0,
-                        false,
-                        true,
-                        () -> {
-                            synchronized (pending) {
-                                if (closed
-                                        || !context.active()
-                                        || quitting.contains(capture.player))
-                                    return completed(Result.STOP);
-                                if (signs.get(capture.player) != captures
-                                        || !captures.queue.contains(capture))
-                                    return completed(Result.CONTINUE);
+        if (sign) {
+            tasks.schedule(
+                            0,
+                            false,
+                            true,
+                            () -> {
+                                open(player, mailbox, request);
+                                return CompletableFuture.completedFuture(Result.CONTINUE);
+                            })
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null || ignored != null && ignored.stopped())
+                                    settle(request, Result.STOP);
+                            });
+        }
+        return request.future;
+    }
+
+    private boolean eligible(Player player) {
+        return player != null && player.isOnline() && players.contains(player.getUniqueId());
+    }
+
+    private void open(Player player, Mailbox mailbox, Waiter request) {
+        boolean allowed;
+        synchronized (monitor) {
+            allowed =
+                    !closed
+                            && !request.future.isDone()
+                            && signs.get(request.player) == mailbox
+                            && eligible(player);
+        }
+        if (!allowed) {
+            settle(request, Result.STOP);
+            return;
+        }
+        SignInput.Prompt prompt =
+                SignInput.openPrompt(
+                        player,
+                        new String[] {"", "", "", ""},
+                        lines -> {
+                            Waiter target;
+                            synchronized (monitor) {
+                                target = closed ? null : mailbox.queue.pollFirst();
                             }
-                            SignInput.Prompt prompt =
-                                    SignInput.openPrompt(
-                                            player,
-                                            new String[0],
-                                            lines -> submitted(capture.player, captures, lines));
-                            boolean cancel;
-                            synchronized (pending) {
-                                cancel = closed || signs.get(capture.player) != captures;
-                                if (!cancel) {
-                                    captures.prompt = prompt;
-                                    discardFinishedSigns(capture.player, captures);
-                                }
-                            }
-                            if (cancel) prompt.cancel();
-                            return completed(Result.CONTINUE);
-                        })
-                .whenComplete(
-                        (value, error) -> {
-                            if (error != null) capture.result.completeExceptionally(error);
-                            else if (value.stopped()) capture.result.complete(Result.STOP);
+                            if (target != null) resume(target, lines.clone());
                         });
-        return capture.result;
-    }
-
-    void clearSign(Player player) {
-        if (player == null) return;
-        List<Capture> cleared;
-        synchronized (pending) {
-            SignCaptures captures = signs.get(player.getUniqueId());
-            if (captures == null) return;
-            cleared = List.copyOf(captures.queue);
-            captures.queue.clear();
+        boolean obsolete;
+        synchronized (monitor) {
+            obsolete = closed || signs.get(request.player) != mailbox;
+            if (!obsolete) mailbox.prompt = prompt;
         }
-        // Legacy clear resumes successfully and deliberately leaves the current UI open.
-        for (Capture capture : cleared) resume(capture, null);
-    }
-
-    private void submitted(UUID player, SignCaptures captures, String[] lines) {
-        Capture capture;
-        synchronized (pending) {
-            if (closed || signs.get(player) != captures) return;
-            capture = captures.queue.pollFirst();
-            discardFinishedSigns(player, captures);
-        }
-        if (capture != null) resume(capture, lines.clone());
-    }
-
-    /** Call with pending held; a cleared queue can still own an unanswered UI. */
-    private void discardFinishedSigns(UUID player, SignCaptures captures) {
-        if (captures.all.isEmpty() && (captures.prompt == null || !captures.prompt.isWaiting()))
-            signs.remove(player, captures);
+        if (obsolete) cancel(prompt);
     }
 
     void clear(Player player) {
+        drain(player, chat);
+    }
+
+    void clearSign(Player player) {
+        drain(player, signs);
+    }
+
+    private void drain(Player player, Map<UUID, Mailbox> source) {
         if (player == null) return;
-        List<Capture> cleared;
-        synchronized (pending) {
-            Captures captures = pending.get(player.getUniqueId());
-            if (captures == null) return;
-            cleared = List.copyOf(captures.queue);
-            captures.queue.clear();
+        List<Waiter> batch;
+        synchronized (monitor) {
+            Mailbox mailbox = source.get(player.getUniqueId());
+            if (mailbox == null) return;
+            batch = new ArrayList<>(mailbox.queue);
+            mailbox.queue.clear();
         }
-        for (Capture capture : cleared) resume(capture, null);
+        for (Waiter request : batch) resume(request, null);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void chat(AsyncPlayerChatEvent event) {
-        Capture capture;
-        synchronized (pending) {
-            Captures captures = pending.get(event.getPlayer().getUniqueId());
-            capture = captures == null ? null : captures.queue.pollFirst();
+        Waiter request;
+        synchronized (monitor) {
+            Mailbox mailbox = closed ? null : chat.get(event.getPlayer().getUniqueId());
+            request = mailbox == null ? null : mailbox.queue.pollFirst();
         }
-        if (capture == null) return;
-        event.setCancelled(capture.cancel);
-        resume(capture, event.getMessage());
+        if (request == null) return;
+        event.setCancelled(request.cancel);
+        resume(request, event.getMessage());
     }
 
-    private void resume(Capture capture, Object message) {
+    private void resume(Waiter request, Object answer) {
         tasks.schedule(
                         0,
-                        !capture.context.isSync(),
+                        !request.context.isSync(),
                         true,
                         () -> {
-                            if (closed || capture.result.isDone() || !capture.context.active())
-                                return completed(Result.STOP);
-                            if (message != null) {
-                                capture.context.getGlobal().put(capture.key, message);
-                                if (message instanceof String[] lines)
-                                    for (int line = 0; line < 4; line++)
-                                        capture.context
-                                                .getGlobal()
-                                                .put(capture.key + "." + line, lines[line]);
+                            boolean allowed;
+                            synchronized (monitor) {
+                                allowed =
+                                        !closed
+                                                && unsettled.contains(request)
+                                                && !request.future.isDone()
+                                                && !quitting.contains(request.player)
+                                                && request.context.active();
                             }
-                            return completed(Result.CONTINUE);
+                            if (!allowed) settle(request, Result.STOP);
+                            else {
+                                if (answer != null) {
+                                    request.context.getGlobal().put(request.key, answer);
+                                    if (answer instanceof String[] lines) {
+                                        for (int index = 0; index < lines.length; index++) {
+                                            request.context
+                                                    .getGlobal()
+                                                    .put(request.key + "." + index, lines[index]);
+                                        }
+                                    }
+                                }
+                                settle(request, Result.CONTINUE);
+                            }
+                            return CompletableFuture.completedFuture(Result.CONTINUE);
                         })
                 .whenComplete(
-                        (value, error) -> {
-                            if (error != null) capture.result.completeExceptionally(error);
-                            else capture.result.complete(value);
+                        (result, failure) -> {
+                            if (failure != null || result != null && result.stopped())
+                                settle(request, Result.STOP);
                         });
+    }
+
+    private void settle(Waiter request, Result result) {
+        synchronized (monitor) {
+            unsettled.remove(request);
+            Mailbox first = chat.get(request.player);
+            Mailbox second = signs.get(request.player);
+            if (first != null) first.queue.remove(request);
+            if (second != null) second.queue.remove(request);
+        }
+        request.future.complete(result);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void quit(PlayerQuitEvent event) {
-        List<Capture> stopped;
+        UUID id = event.getPlayer().getUniqueId();
+        List<Waiter> batch;
         SignInput.Prompt prompt;
-        synchronized (pending) {
-            quitting.add(event.getPlayer().getUniqueId());
-            Captures captures = pending.remove(event.getPlayer().getUniqueId());
-            stopped = captures == null ? new ArrayList<>() : new ArrayList<>(captures.all);
-            SignCaptures sign = signs.remove(event.getPlayer().getUniqueId());
-            if (sign != null) stopped.addAll(sign.all);
+        synchronized (monitor) {
+            quitting.add(id);
+            chat.remove(id);
+            Mailbox sign = signs.remove(id);
             prompt = sign == null ? null : sign.prompt;
+            batch = unsettled.stream().filter(waiter -> waiter.player.equals(id)).toList();
+            unsettled.removeAll(batch);
         }
-        if (prompt != null) cancelPrompts(List.of(prompt));
-        for (Capture capture : stopped) capture.result.complete(Result.STOP);
-        // CraftPlayer can still report online inside PlayerQuitEvent. Keep a short fence
-        // until the event returns; registration also rechecks online state under the lock.
+        if (prompt != null) cancel(prompt);
+        for (Waiter waiter : batch) waiter.future.complete(Result.STOP);
         tasks.schedule(
                 1,
                 false,
                 false,
                 () -> {
-                    synchronized (pending) {
-                        quitting.remove(event.getPlayer().getUniqueId());
+                    synchronized (monitor) {
+                        quitting.remove(id);
                     }
-                    return completed(Result.CONTINUE);
+                    return CompletableFuture.completedFuture(Result.CONTINUE);
                 });
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void join(PlayerJoinEvent event) {
-        synchronized (pending) {
+        synchronized (monitor) {
             quitting.remove(event.getPlayer().getUniqueId());
         }
     }
 
     @Override
     public void close() {
-        List<Capture> stopped = new ArrayList<>();
-        List<SignInput.Prompt> prompts = new ArrayList<>();
-        synchronized (pending) {
+        List<Waiter> batch;
+        List<SignInput.Prompt> prompts;
+        synchronized (monitor) {
             if (closed) return;
             closed = true;
-            for (Captures captures : pending.values()) stopped.addAll(captures.all);
-            for (SignCaptures captures : signs.values()) {
-                stopped.addAll(captures.all);
-                if (captures.prompt != null) prompts.add(captures.prompt);
-            }
-            pending.clear();
+            batch = new ArrayList<>(unsettled);
+            prompts =
+                    signs.values().stream()
+                            .map(box -> box.prompt)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+            unsettled.clear();
+            chat.clear();
             signs.clear();
             quitting.clear();
         }
         HandlerList.unregisterAll(this);
-        for (Capture capture : stopped) capture.result.complete(Result.STOP);
-        cancelPrompts(prompts);
+        for (Waiter waiter : batch) waiter.future.complete(Result.STOP);
+        for (SignInput.Prompt prompt : prompts) cancel(prompt);
     }
 
-    private void cancelPrompts(List<SignInput.Prompt> prompts) {
-        if (prompts.isEmpty()) return;
-        Runnable cancel =
+    private void cancel(SignInput.Prompt prompt) {
+        Runnable release =
                 () -> {
-                    for (SignInput.Prompt prompt : prompts) {
-                        try {
-                            prompt.cancel();
-                        } catch (RuntimeException error) {
+                    try {
+                        prompt.cancel();
+                    } catch (IllegalPluginAccessException failure) {
+                        if (plugin.isEnabled())
                             plugin.getLogger()
-                                    .log(
-                                            java.util.logging.Level.WARNING,
-                                            "Cannot release closed sign input prompt",
-                                            error);
-                        }
+                                    .log(Level.WARNING, "Could not cancel sign prompt", failure);
+                    } catch (RuntimeException failure) {
+                        plugin.getLogger()
+                                .log(Level.WARNING, "Could not cancel sign prompt", failure);
                     }
                 };
-        if (Bukkit.isPrimaryThread()) cancel.run();
-        // PaperActions closes ActionTasks first. This cleanup must survive that revision's
-        // task cancellation, and the prompt token can never cancel a replacement's UI.
+        if (Bukkit.isPrimaryThread()) release.run();
         else if (plugin.isEnabled()) {
             try {
-                Bukkit.getScheduler().runTask(plugin, cancel);
-            } catch (org.bukkit.plugin.IllegalPluginAccessException disabled) {
-                if (plugin.isEnabled()) throw disabled;
+                Bukkit.getScheduler().runTask(plugin, release);
+            } catch (IllegalPluginAccessException failure) {
+                if (plugin.isEnabled()) throw failure;
             }
         }
-        // During plugin disable Keystone's own listener releases all remaining prompts.
     }
 
-    private static CompletionStage<Result> completed(Result result) {
-        return CompletableFuture.completedFuture(result);
-    }
-
-    private static class Captures {
-        final ArrayDeque<Capture> queue = new ArrayDeque<>();
-        // Includes a chat already polled whose continuation has not reached its owner thread yet.
-        final Set<Capture> all = new HashSet<>();
-    }
-
-    private static final class SignCaptures extends Captures {
+    private static final class Mailbox {
+        final ArrayDeque<Waiter> queue = new ArrayDeque<>();
         SignInput.Prompt prompt;
     }
 
-    private static final class Capture {
+    private static final class Waiter {
         final UUID player;
         final NiActionContext context;
         final String key;
         final boolean cancel;
-        final CompletableFuture<Result> result = new CompletableFuture<>();
+        final CompletableFuture<Result> future = new CompletableFuture<>();
 
-        Capture(UUID player, NiActionContext context, String key, boolean cancel) {
+        Waiter(UUID player, NiActionContext context, String key, boolean cancel) {
             this.player = player;
             this.context = context;
             this.key = key;

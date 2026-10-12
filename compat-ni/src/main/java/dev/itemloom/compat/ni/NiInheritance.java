@@ -1,16 +1,11 @@
 package dev.itemloom.compat.ni;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-/** Resolves inheritance before templates execute; global imports override local nodes as NI does. */
 public final class NiInheritance {
     private final NiRepository.Input input;
-    private final Map<String, NiConfig> inherited = new LinkedHashMap<>();
-    private final Deque<String> resolving = new ArrayDeque<>();
+    private final Map<String, NiConfig> resolved = new LinkedHashMap<>();
+    private final LinkedHashSet<String> visiting = new LinkedHashSet<>();
 
     public NiInheritance(NiRepository.Input input) {
         this.input = input;
@@ -18,100 +13,79 @@ public final class NiInheritance {
 
     public Map<String, NiConfig> resolveAll() {
         Map<String, NiConfig> result = new LinkedHashMap<>();
-        input.items().keySet().forEach(id -> result.put(id, resolve(id)));
-        return java.util.Collections.unmodifiableMap(result);
+        for (String id : input.items().keySet()) result.put(id, resolve(id));
+        return Collections.unmodifiableMap(result);
     }
 
     public NiConfig resolve(String id) {
-        return globals(inherit(id), true);
-    }
-
-    /** An unregistered root inherits from the original registry, even when it has the same id. */
-    public NiConfig resolveRoot(NiConfig root) {
-        return globals(inheritSource(root, "dynamic item"), true);
-    }
-
-    private NiConfig inherit(String id) {
-        NiConfig previous = inherited.get(id);
-        if (previous != null) return previous;
-        NiRepository.Definition definition = input.items().get(id);
-        if (definition == null) throw new IllegalArgumentException("Missing inherited item: " + id);
-        if (resolving.contains(id)) {
+        if (resolved.containsKey(id)) return resolved.get(id).without("globalsections");
+        NiRepository.Definition item = input.items().get(id);
+        if (item == null) throw new IllegalArgumentException("Missing parent item: " + id);
+        if (!visiting.add(id))
             throw new IllegalArgumentException(
-                    definition.source()
-                            + ": cyclic inheritance "
-                            + String.join(" -> ", resolving)
-                            + " -> "
-                            + id);
-        }
-        resolving.addLast(id);
+                    item.source() + ": " + String.join(" -> ", visiting) + " -> " + id);
         try {
-            NiConfig result = inheritSource(definition.config(), definition.source() + ": " + id);
-            inherited.put(id, result);
-            return result;
+            NiConfig result = root(item.config(), item.source() + " / " + id);
+            resolved.put(id, result);
+            return result.without("globalsections");
         } finally {
-            resolving.removeLast();
+            visiting.remove(id);
         }
     }
 
-    private NiConfig inheritSource(NiConfig source, String description) {
-        NiConfig result = new NiConfig(Map.of());
-        Object parents = source.get("inherit");
-        if (parents instanceof String parent) result = parent(parent);
-        else if (parents instanceof List<?> list) {
-            for (Object parent : list) {
-                if (!(parent instanceof String name))
-                    throw new IllegalArgumentException(
-                            description + ".inherit must contain item ids");
-                result = result.overlay(parent(name));
-            }
-        } else if (parents instanceof Map<?, ?> map) {
-            result = partial(result, "", map);
-        }
-        return result.overlay(source);
+    public NiConfig resolveRoot(NiConfig root) {
+        return root(root, "root").without("globalsections");
     }
 
     private NiConfig parent(String id) {
-        return globals(inherit(id), false);
+        resolve(id);
+        return resolved.get(id);
     }
 
-    private NiConfig partial(NiConfig target, String prefix, Map<?, ?> mappings) {
-        for (Map.Entry<?, ?> entry : mappings.entrySet()) {
+    private NiConfig root(NiConfig child, String source) {
+        NiConfig base = new NiConfig(Map.of());
+        Object parents = child.get("inherit");
+        if (parents instanceof String id) base = base.overlay(parent(id));
+        else if (parents instanceof List<?> list)
+            for (Object parent : list) {
+                if (!(parent instanceof String id))
+                    throw new IllegalArgumentException(source + ".inherit must contain item ids");
+                base = base.overlay(parent(id));
+            }
+        else if (parents instanceof Map<?, ?> map) base = selected(base, map, "");
+        return imports(base.overlay(child), true, false);
+    }
+
+    private NiConfig selected(NiConfig target, Map<?, ?> paths, String prefix) {
+        for (var entry : paths.entrySet()) {
             String path =
-                    prefix.isEmpty() ? entry.getKey().toString() : prefix + "." + entry.getKey();
-            if (entry.getValue() instanceof String parent) {
-                Object selected = parent(parent).get(path);
-                if (selected != null) target = target.with(path, selected);
-            } else if (entry.getValue() instanceof Map<?, ?> nested)
-                target = partial(target, path, nested);
+                    prefix.isEmpty()
+                            ? String.valueOf(entry.getKey())
+                            : prefix + "." + entry.getKey();
+            if (entry.getValue() instanceof Map<?, ?> map) target = selected(target, map, path);
+            else if (entry.getValue() instanceof String id) {
+                Object value = parent(id).get(path);
+                if (value != null) target = target.with(path, value);
+            }
         }
         return target;
     }
 
-    private NiConfig globals(NiConfig config, boolean removeImports) {
-        return globals(config, removeImports, true);
-    }
-
-    /** Packs import global nodes without item inheritance; NI ignores missing pack imports. */
-    public NiConfig packGlobals(NiConfig config) {
-        return globals(config, true, false);
-    }
-
-    private NiConfig globals(NiConfig config, boolean removeImports, boolean strict) {
+    private NiConfig imports(NiConfig config, boolean strict, boolean strip) {
+        NiConfig result = config;
         for (String id : config.strings("globalsections")) {
             NiConfig file = input.globalFiles().get(id.replace('\\', '/'));
-            if (file != null) {
-                for (String key : file.keys())
-                    config = config.with("sections." + key, file.get(key));
-            } else {
-                Object value = input.globalValues().get(id);
-                if (value == null) {
-                    if (strict) throw new IllegalArgumentException("Missing global section: " + id);
-                    continue;
-                }
-                config = config.with("sections." + id, value);
-            }
+            if (file != null)
+                for (var entry : file.values().entrySet())
+                    result = result.with("sections." + entry.getKey(), entry.getValue());
+            else if (input.globalValues().containsKey(id))
+                result = result.with("sections." + id, input.globalValues().get(id));
+            else if (strict) throw new IllegalArgumentException("Missing global section: " + id);
         }
-        return removeImports ? config.without("globalsections") : config;
+        return strip ? result.without("globalsections") : result;
+    }
+
+    public NiConfig packGlobals(NiConfig config) {
+        return imports(config, false, true);
     }
 }

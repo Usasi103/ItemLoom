@@ -1,201 +1,177 @@
 package dev.itemloom.paper.action;
 
-import java.time.Clock;
 import java.lang.ref.WeakReference;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/**
- * Player action state owned by the item service, independently of a compiled catalog revision.
- * The owner calls join/quit and changes configuration only after a successful reload.
- */
 public final class PlayerActionState implements AutoCloseable {
     private final Clock clock;
-    private final Map<UUID, State> players = new ConcurrentHashMap<>();
-    private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
-    private long nextSession;
-    private ReturnLedger returns;
+    private final ConcurrentHashMap<UUID, Data> values = new ConcurrentHashMap<>();
+    private final Map<UUID, Session> sessions = new HashMap<>();
+    private long sequence;
     private boolean resetOnQuit = true;
     private volatile boolean closed;
+    private ReturnLedger ledger;
 
     public PlayerActionState() {
         this(Clock.systemUTC());
     }
 
     public PlayerActionState(Clock clock) {
-        this.clock = Objects.requireNonNull(clock, "clock");
+        this.clock = Objects.requireNonNull(clock);
     }
 
-    /** The service calls this before loading catalogs; standalone runtime probes use an in-memory ledger. */
-    public synchronized void initializeReturns(JavaPlugin plugin, Path file) {
-        if (closed || returns != null)
-            throw new IllegalStateException(
-                    "Return ledger is already initialized or state is closed");
-        returns = new ReturnLedger(plugin, this, Objects.requireNonNull(file));
+    public synchronized void initializeReturns(JavaPlugin plugin, Path path) {
+        Objects.requireNonNull(path);
+        if (closed || ledger != null)
+            throw new IllegalStateException("Return ledger already initialized or closed");
+        ledger = new ReturnLedger(plugin, this, path);
     }
 
     synchronized ReturnLedger returns(JavaPlugin plugin) {
-        if (returns == null) {
-            if (closed) throw new IllegalStateException("Player action state is closed");
-            returns = new ReturnLedger(plugin, this, null);
-        }
-        return returns;
+        if (closed) throw new IllegalStateException("Player state is closed");
+        if (ledger == null) ledger = new ReturnLedger(plugin, this, null);
+        return ledger;
     }
 
     public synchronized ReturnLedger returnLedger() {
-        if (returns == null)
-            throw new IllegalStateException("Return ledger has not been initialized");
-        return returns;
+        if (ledger == null) throw new IllegalStateException("Return ledger is not initialized");
+        return ledger;
     }
 
-    /** Changing the policy preserves all existing state until the next join or quit. */
-    public synchronized void configure(boolean resetCooldownWhenPlayerQuit) {
-        if (!closed) resetOnQuit = resetCooldownWhenPlayerQuit;
+    public synchronized void configure(boolean resetOnQuit) {
+        this.resetOnQuit = resetOnQuit;
     }
 
-    /** Also called for players already online when the service starts, but never for a reload. */
-    public synchronized void join(UUID player) {
-        Objects.requireNonNull(player, "player");
+    public synchronized void join(UUID id) {
         if (closed) return;
-        sessions.put(player, new Session(++nextSession));
-        if (resetOnQuit) players.put(player, new State());
-        else players.computeIfAbsent(player, ignored -> new State());
+        if (resetOnQuit) values.put(id, new Data());
+        else values.computeIfAbsent(id, ignored -> new Data());
+        if (++sequence == 0) sequence++;
+        sessions.put(id, new Session(sequence));
     }
 
-    /** Bind the actual current player object; a reconnect cannot reuse an old session's target. */
     public synchronized void join(Player player) {
         join(player.getUniqueId());
         if (closed) return;
-        observe(player);
-        if (returns != null) returns.joined(player);
+        sessions.get(player.getUniqueId()).target = new WeakReference<>(player);
+        if (ledger != null) ledger.joined(player);
     }
 
-    /** With reset disabled, metadata and cooldowns survive a reconnect until service shutdown. */
-    public synchronized void quit(UUID player) {
-        Objects.requireNonNull(player, "player");
-        sessions.remove(player);
-        if (!closed && resetOnQuit) players.remove(player);
+    public synchronized void quit(UUID id) {
+        sessions.remove(id);
+        if (!closed && resetOnQuit) values.remove(id);
     }
 
-    synchronized long session(UUID player) {
-        Session session = sessions.get(player);
-        return session == null ? 0 : session.id;
+    synchronized long session(UUID id) {
+        Session current = closed ? null : sessions.get(id);
+        return current == null ? 0 : current.token;
     }
 
     synchronized void observe(Player player) {
-        Session session = sessions.get(player.getUniqueId());
-        if (session != null && session.player.get() == null)
-            session.player = new WeakReference<>(player);
+        Session current = closed ? null : sessions.get(player.getUniqueId());
+        if (current != null && current.target == null) current.target = new WeakReference<>(player);
     }
 
-    synchronized Player resolve(UUID player, long expectedSession) {
-        if (closed) return null;
-        Session session = sessions.get(player);
-        if (session == null || session.id != expectedSession) return null;
-        Player target = session.player.get();
-        return target != null && target.isOnline() ? target : null;
+    synchronized Player resolve(UUID id, long expected) {
+        Session current = closed ? null : sessions.get(id);
+        if (current == null || expected == 0 || current.token != expected || current.target == null)
+            return null;
+        Player player = current.target.get();
+        return player != null && player.isOnline() ? player : null;
     }
 
     public boolean active() {
         return !closed;
     }
 
-    public boolean contains(UUID player) {
-        return state(player) != null;
+    public boolean contains(UUID id) {
+        return !closed && values.containsKey(id);
     }
 
-    public boolean hasMetadata(UUID player, String key) {
-        State state = state(player);
-        return state != null && state.metadata.containsKey(key);
+    private Data data(UUID id) {
+        return closed ? null : values.get(id);
     }
 
-    /** Metadata values retain their identity, including mutable lists used by old scripts. */
-    public Object getMetadata(UUID player, String key, Object fallback) {
-        State state = state(player);
-        return state == null ? fallback : state.metadata.getOrDefault(key, fallback);
+    public boolean hasMetadata(UUID id, String key) {
+        Data data = data(id);
+        return data != null && data.metadata.containsKey(key);
     }
 
-    public void setMetadata(UUID player, String key, Object value) {
-        State state = state(player);
-        if (state != null) state.metadata.put(key, value);
+    public Object getMetadata(UUID id, String key, Object fallback) {
+        Data data = data(id);
+        return data == null ? fallback : data.metadata.getOrDefault(key, fallback);
     }
 
-    public Object metadataIfAbsent(
-            UUID player, String key, java.util.function.Supplier<?> factory) {
-        State state = state(player);
-        return state == null ? null : state.metadata.computeIfAbsent(key, ignored -> factory.get());
+    public void setMetadata(UUID id, String key, Object value) {
+        Data data = data(id);
+        if (data != null) data.metadata.put(key, value);
     }
 
-    /**
-     * Returns the remaining milliseconds, or reserves the next cooldown and returns zero.
-     * Non-positive durations bypass the check without changing an existing reservation.
-     */
-    public long checkCooldown(UUID player, String key, long duration) {
-        State state = state(player);
-        if (state == null) return Long.MAX_VALUE;
-        Objects.requireNonNull(key, "key");
+    public Object metadataIfAbsent(UUID id, String key, Supplier<?> factory) {
+        Data data = data(id);
+        return data == null ? null : data.metadata.computeIfAbsent(key, ignored -> factory.get());
+    }
+
+    public long checkCooldown(UUID id, String group, long duration) {
+        Data data = data(id);
+        if (data == null) return Long.MAX_VALUE;
         if (duration <= 0) return 0;
-        synchronized (state.cooldowns) {
-            long now = clock.millis();
-            long until = state.cooldowns.getOrDefault(key, 0L);
-            if (until > now) return until - now;
-            state.cooldowns.put(key, now + duration);
-            return 0;
-        }
+        long now = clock.millis();
+        AtomicLong remaining = new AtomicLong();
+        data.deadlines.compute(
+                group,
+                (ignored, deadline) -> {
+                    if (deadline != null && deadline > now) {
+                        remaining.set(deadline - now);
+                        return deadline;
+                    }
+                    return now + duration;
+                });
+        return remaining.get();
     }
 
-    public long getCooldown(UUID player, String key) {
-        State state = state(player);
-        if (state == null) return Long.MAX_VALUE;
-        Objects.requireNonNull(key, "key");
-        synchronized (state.cooldowns) {
-            long now = clock.millis();
-            long until = state.cooldowns.getOrDefault(key, 0L);
-            return until > now ? until - now : 0;
-        }
+    public long getCooldown(UUID id, String group) {
+        Data data = data(id);
+        if (data == null) return Long.MAX_VALUE;
+        Long deadline = data.deadlines.get(group);
+        return deadline == null ? 0 : Math.max(0, deadline - clock.millis());
     }
 
-    /** Keys are used verbatim. The item trigger adapter supplies its own group namespace. */
-    public void setCooldown(UUID player, String key, long duration) {
-        State state = state(player);
-        if (state == null) return;
-        Objects.requireNonNull(key, "key");
-        synchronized (state.cooldowns) {
-            state.cooldowns.put(key, clock.millis() + duration);
-        }
-    }
-
-    private State state(UUID player) {
-        Objects.requireNonNull(player, "player");
-        return closed ? null : players.get(player);
+    public void setCooldown(UUID id, String group, long duration) {
+        Data data = data(id);
+        if (data != null) data.deadlines.put(group, clock.millis() + duration);
     }
 
     @Override
     public synchronized void close() {
         if (closed) return;
         closed = true;
-        if (returns != null) returns.close();
-        players.clear();
+        if (ledger != null) ledger.close();
         sessions.clear();
+        values.clear();
+    }
+
+    private static final class Data {
+        final ConcurrentHashMap<String, Object> metadata = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<String, Long> deadlines = new ConcurrentHashMap<>();
     }
 
     private static final class Session {
-        final long id;
-        WeakReference<Player> player = new WeakReference<>(null);
+        final long token;
+        WeakReference<Player> target;
 
-        Session(long id) {
-            this.id = id;
+        Session(long token) {
+            this.token = token;
         }
-    }
-
-    private static final class State {
-        final Map<String, Object> metadata = new ConcurrentHashMap<>();
-        final Map<String, Long> cooldowns = new HashMap<>();
     }
 }

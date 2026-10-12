@@ -4,49 +4,47 @@ import cn.gtemc.itembridge.api.context.BuildContext;
 import cn.gtemc.itembridge.api.context.ContextKey;
 import cn.gtemc.itembridge.core.BukkitItemBridge;
 import dev.itemloom.paper.ItemsService;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 
-/** External prototypes and the legacy script lookup order, serialized on the server thread. */
 public final class OptionalItemSources {
-    private static final String[] LEGACY_ORDER = {"mythicmobs", "magicgem", "itemsadder", "oraxen"};
+    private static final List<String> SEARCH =
+            List.of("mythicmobs", "magicgem", "itemsadder", "oraxen");
     private final ItemBridgeSource source;
 
     public OptionalItemSources() {
         source = new ItemBridgeSource();
     }
 
-    /** A scoped registry can supply independent providers without changing the global plugin state. */
     OptionalItemSources(BukkitItemBridge bridge, Map<String, Plugin> owners) {
         source = new ItemBridgeSource(bridge, owners);
     }
 
-    /** Resolves an explicit external material; a missing source or item is a configuration error. */
-    public ItemStack material(String specification, Player player, Map<String, ?> context) {
+    public ItemStack material(String specification, Player player, Map<String, ?> values) {
         ItemsService.requireThread();
-        ExternalItemMaterial material = ExternalItemMaterial.parse(specification);
+        var material = ExternalItemMaterial.parse(specification);
         return source.item(
-                material.provider(), material.id(), player, context(context), false, true);
+                material.provider(), material.id(), player, context(values), false, true);
     }
 
     public ItemStack getHookedItem(String id) {
         return getHookedItem(id, null, Map.of());
     }
 
-    public ItemStack getHookedItem(String id, Player player, Map<String, ?> context) {
+    public ItemStack getHookedItem(String id, Player player, Map<String, ?> values) {
         ItemsService.requireThread();
         if (id == null || id.isBlank()) return null;
-        if (ExternalItemMaterial.isExternal(id)) return material(id, player, context);
-        BuildContext buildContext = context(context);
-        int split = id.indexOf(':');
-        if (split >= 0) {
-            String prefix = id.substring(0, split).toLowerCase(Locale.ROOT);
+        if (ExternalItemMaterial.isExternal(id)) return material(id, player, values);
+        BuildContext context = context(values);
+        int colon = id.indexOf(':');
+        if (colon >= 0) {
+            String prefix = id.substring(0, colon).toLowerCase(Locale.ROOT);
             ExternalItemMaterial.requireAllowed(prefix);
-            String key = id.substring(split + 1);
             String provider =
                     switch (prefix) {
                         case "mm", "mythicmobs" -> "mythicmobs";
@@ -55,42 +53,42 @@ public final class OptionalItemSources {
                         case "or", "oraxen" -> "oraxen";
                         default -> null;
                     };
-            ItemStack item =
-                    provider == null
-                            ? switch (prefix) {
-                                case "vn", "vanilla" -> vanilla(key);
-                                default -> null;
-                            }
-                            : source.item(provider, key, player, buildContext, false, false);
-            if (item != null) return item;
+            if (prefix.equals("vn") || prefix.equals("vanilla")) {
+                ItemStack item = vanilla(id.substring(colon + 1));
+                if (item != null) return item;
+            }
+            if (provider != null) {
+                ItemStack item =
+                        source.item(
+                                provider, id.substring(colon + 1), player, context, false, false);
+                if (item != null) return item;
+            }
         }
-        for (String provider : LEGACY_ORDER) {
-            ItemStack item = source.item(provider, id, player, buildContext, true, false);
+        for (String provider : SEARCH) {
+            ItemStack item = source.item(provider, id, player, context, true, false);
             if (item != null) return item;
         }
         return vanilla(id.toUpperCase(Locale.ROOT));
     }
 
     private static ItemStack vanilla(String id) {
-        Material material = Material.matchMaterial(id);
-        return material == null ? null : new ItemStack(material);
+        Material type = Material.matchMaterial(id);
+        return type == null ? null : new ItemStack(type);
     }
 
     private static BuildContext context(Map<String, ?> values) {
         if (values == null || values.isEmpty()) return BuildContext.empty();
-        BuildContext.Builder builder = BuildContext.builder();
-        values.forEach(
-                (key, value) -> {
-                    if (key == null || key.isBlank())
-                        throw new IllegalArgumentException(
-                                "External item context key must not be blank");
-                    if (value != null) put(builder, key, value);
-                });
+        var builder = BuildContext.builder();
+        for (var entry : values.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank())
+                throw new IllegalArgumentException("外部物品参数名不能为空");
+            if (entry.getValue() != null) put(builder, entry.getKey(), entry.getValue());
+        }
         return builder.build();
     }
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private static void put(BuildContext.Builder builder, String key, Object value) {
-        builder.with(ContextKey.of((Class<Object>) value.getClass(), key), value);
+        builder.with(ContextKey.of((Class) value.getClass(), key), value);
     }
 }

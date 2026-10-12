@@ -1,14 +1,9 @@
 package dev.itemloom.compat.ni.script;
 
-import java.util.List;
-import java.util.Map;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiEvaluation;
-import dev.itemloom.compat.ni.NiNodes;
-import dev.itemloom.compat.ni.NiYaml;
+import dev.itemloom.compat.ni.*;
+import java.util.*;
 import org.bukkit.configuration.ConfigurationSection;
 
-/** Script constructor alias, not an NI runtime class. */
 public final class LegacyCustomSection implements NiNodes.Extension {
     @FunctionalInterface
     public interface Configured {

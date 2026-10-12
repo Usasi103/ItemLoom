@@ -83,6 +83,10 @@ final class UseRestrictionsProbe {
                                         new Class<?>[] {CraftingInventory.class},
                                         (self, method, args) ->
                                                 switch (method.getName()) {
+                                                    case "equals" -> self == args[0];
+                                                    case "hashCode" ->
+                                                            System.identityHashCode(self);
+                                                    case "toString" -> "ProbeCraftingInventory";
                                                     case "getMatrix", "getContents" -> matrix;
                                                     case "getResult" -> result[0];
                                                     case "setResult" -> {
@@ -274,6 +278,9 @@ final class UseRestrictionsProbe {
                         new Class<?>[] {type},
                         (self, method, args) ->
                                 switch (method.getName()) {
+                                    case "equals" -> self == args[0];
+                                    case "hashCode" -> System.identityHashCode(self);
+                                    case "toString" -> "ProbeInventoryView";
                                     case "getTopInventory" -> inventory;
                                     case "getBottomInventory" -> player.getInventory();
                                     case "getInventory" -> inventory;

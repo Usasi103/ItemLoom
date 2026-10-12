@@ -1,5 +1,8 @@
 package dev.itemloom.probe;
 
+import dev.itemloom.paper.runtime.DisplayAccess;
+import dev.itemloom.paper.runtime.FormatRuntimeLoader;
+
 import com.mojang.authlib.GameProfile;
 import com.mojang.datafixers.util.Pair;
 import io.netty.buffer.Unpooled;
@@ -766,7 +769,8 @@ final class ItemDisplayProbe {
     private static void integration(
             Checks c, JavaPlugin plugin, CompletableFuture<Map<String, Object>> result) {
         Fixture f = new Fixture(plugin);
-        AtomicReference<NiCatalog> current = new AtomicReference<>(f.catalog);
+        AtomicReference<DisplayAccess> current =
+                new AtomicReference<>(FormatRuntimeLoader.display(f.catalog));
         var original =
                 CraftItemStack.unwrap(
                         f.catalog.generate("shown", null, Map.of("roll", "saved"), false));
@@ -895,7 +899,7 @@ final class ItemDisplayProbe {
                                         "in-place event text and NBT edits affect only the display copy");
                                 var display = packet.getItem();
                                 try (Fixture replacement = new Fixture(plugin, "reloaded")) {
-                                    current.set(replacement.catalog);
+                                    current.set(FormatRuntimeLoader.display(replacement.catalog));
                                     f.catalog.close();
                                     var unsent =
                                             CraftItemStack.unwrap(

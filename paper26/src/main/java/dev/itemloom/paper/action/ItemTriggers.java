@@ -1,7 +1,21 @@
 package dev.itemloom.paper.action;
 
-import java.util.HashSet;
+import dev.itemloom.compat.ni.NiConfig;
+import dev.itemloom.compat.ni.NiRepository;
+import dev.itemloom.compat.ni.action.NiActionContext;
+import dev.itemloom.compat.ni.action.NiContextKeys;
+import dev.itemloom.compat.ni.script.LegacyActionManager;
+import dev.itemloom.compat.ni.script.LegacySectionUtils;
+import dev.itemloom.core.ItemIdentity;
+import dev.itemloom.paper.ItemsService;
+import dev.itemloom.paper.compat.script.LegacyActionTrigger;
+import dev.itemloom.paper.compat.script.LegacyItemActionEvent;
+import dev.itemloom.paper.compat.script.LegacyItemActionType;
+import dev.itemloom.paper.compat.script.LegacyItemInfo;
+import dev.itemloom.paper.nms.ItemStateCodec;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -10,51 +24,34 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.BooleanSupplier;
-import dev.itemloom.compat.ni.NiConfig;
-import dev.itemloom.compat.ni.NiRepository;
-import dev.itemloom.compat.ni.NiYaml;
-import dev.itemloom.compat.ni.action.NiActionContext;
-import dev.itemloom.compat.ni.action.NiContextKeys;
-import dev.itemloom.compat.ni.script.LegacyActionManager;
-import dev.itemloom.compat.ni.script.LegacySectionUtils;
-import dev.itemloom.core.ItemIdentity;
-import dev.itemloom.paper.compat.NiItemNodes;
-import dev.itemloom.paper.compat.script.LegacyActionTrigger;
-import dev.itemloom.paper.compat.script.LegacyActionTrigger.ConsumeInfo;
-import dev.itemloom.paper.compat.script.LegacyItemActionEvent;
-import dev.itemloom.paper.compat.script.LegacyItemActionType;
-import dev.itemloom.paper.compat.script.LegacyItemInfo;
-import org.bukkit.Bukkit;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.craftbukkit.inventory.CraftItemStack;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.Event;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/** Compiles NI ItemActions into independent steps and commits trigger gates on the server thread. */
 public final class ItemTriggers implements AutoCloseable {
     private final PaperActions actions;
     private final PlayerActionState players;
     private final BiFunction<Object, Map<String, Object>, NiActionContext> contexts;
-    private final Map<String, Map<String, LegacyActionTrigger>> items;
+    private final ItemStateCodec codec = new ItemStateCodec();
+    private final Map<String, Map<String, LegacyActionTrigger>> triggers;
     private final Set<String> keys;
-    private final boolean tickPrefix;
     private final long tickSlots;
+    private final ReturnLedger ledger;
+    private final UUID owner = UUID.randomUUID();
+    private final Map<Object, Invocation> occupied = new HashMap<>();
+    private final List<Invocation> running = new ArrayList<>();
+    private final Set<Player> deferredFlush = new HashSet<>();
     private final String cooldownMessage;
     private final String brokenMessage;
-    private final ReturnLedger returns;
-    private final UUID returnOwner = UUID.randomUUID();
-    private final Set<UUID> returnAfterCommit = new HashSet<>();
-    private final Map<ConsumeSlot, EatCommit> eating = new LinkedHashMap<>();
-    private final Map<Object, SourceCommit> sources = new LinkedHashMap<>();
-    private int delayedEventDepth;
+    private int depth;
     private boolean closed;
 
     public ItemTriggers(
@@ -72,11 +69,11 @@ public final class ItemTriggers implements AutoCloseable {
                 new LegacyActionTrigger.Factory(
                         actions,
                         new LegacyActionManager(actions.compiler(), actions::run),
-                        source ->
-                                contexts.apply(null, null)
+                        script ->
+                                contexts.apply(null, Map.of())
                                         .evaluation()
                                         .scripts()
-                                        .validate(source)));
+                                        .validate(script)));
     }
 
     public ItemTriggers(
@@ -86,101 +83,117 @@ public final class ItemTriggers implements AutoCloseable {
             BiFunction<Object, Map<String, Object>, NiActionContext> contexts,
             JavaPlugin plugin,
             LegacyActionTrigger.Factory factory) {
-        this.actions = Objects.requireNonNull(actions, "actions");
-        this.players = Objects.requireNonNull(players, "players");
-        this.contexts = Objects.requireNonNull(contexts, "contexts");
-        returns = players.returns(Objects.requireNonNull(plugin, "plugin"));
-        cooldownMessage = input.settings().string("Messages.itemCooldown");
-        brokenMessage = input.settings().string("Messages.brokenItem");
-        Objects.requireNonNull(factory, "factory");
-        Map<String, Map<String, LegacyActionTrigger>> compiled = new LinkedHashMap<>();
-        Set<String> registered = new HashSet<>();
-        for (var entry : input.actions().entrySet()) {
-            NiConfig config = config(entry.getValue());
-            if (config == null) continue;
-            config = normalize(config, input.settings().bool("ItemAction.upgrade", false));
-            Map<String, LegacyActionTrigger> triggers = new LinkedHashMap<>();
+        this.actions = actions;
+        this.players = players;
+        this.contexts = contexts;
+        ledger = players.returns(plugin);
+        cooldownMessage = input.settings().string("Messages.itemCooldown", "");
+        brokenMessage = input.settings().string("Messages.brokenItem", "");
+        Map<String, Map<String, LegacyActionTrigger>> indexed = new LinkedHashMap<>();
+        Set<String> names = new HashSet<>();
+        for (var item : input.actions().entrySet()) {
+            NiConfig config;
+            if (item.getValue() instanceof NiConfig section) config = section;
+            else if (item.getValue() instanceof Map<?, ?> map) config = config(map);
+            else continue;
+            config =
+                    TriggerRules.normalize(
+                            config, input.settings().bool("ItemAction.upgrade", false));
+            Map<String, LegacyActionTrigger> itemTriggers = new LinkedHashMap<>();
             for (String type : config.keys()) {
-                NiConfig trigger = config.section(type);
-                if (trigger == null) continue;
-                String key = key(type);
+                NiConfig body = config.section(type);
+                if (body == null) continue;
                 try {
-                    triggers.put(
-                            key, factory.create(entry.getKey(), type, NiYaml.toSection(trigger)));
-                } catch (RuntimeException error) {
+                    YamlConfiguration yaml = new YamlConfiguration();
+                    copy(body.values(), yaml);
+                    String key = lower(type);
+                    itemTriggers.put(key, factory.create(item.getKey(), type, yaml));
+                    names.add(key);
+                } catch (RuntimeException failure) {
                     throw new IllegalArgumentException(
-                            "ItemActions / "
-                                    + entry.getKey()
-                                    + " / "
+                            "ItemActions/"
+                                    + item.getKey()
+                                    + "/"
                                     + type
                                     + ": "
-                                    + error.getMessage(),
-                            error);
+                                    + failure.getMessage(),
+                            failure);
                 }
             }
-            registered.addAll(triggers.keySet());
-            compiled.put(entry.getKey(), Map.copyOf(triggers));
+            indexed.put(item.getKey(), Map.copyOf(itemTriggers));
         }
-        items = Map.copyOf(compiled);
-        keys = Set.copyOf(registered);
-        tickPrefix = keys.stream().anyMatch(value -> value.startsWith("tick_"));
+        triggers = Map.copyOf(indexed);
+        keys = Set.copyOf(names);
         long slots = 0;
         for (int slot = 0; slot <= 40; slot++)
             if (keys.contains("tick_" + slot)) slots |= 1L << slot;
         tickSlots = slots;
     }
 
+    private static NiConfig config(Map<?, ?> map) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return new NiConfig(result);
+    }
+
+    private static void copy(Map<String, Object> values, ConfigurationSection target) {
+        values.forEach(
+                (key, value) -> {
+                    if (value instanceof Map<?, ?> nested)
+                        copy(config(nested).values(), target.createSection(key));
+                    else target.set(key, value);
+                });
+    }
+
+    private static String lower(String value) {
+        return value.toLowerCase(Locale.getDefault());
+    }
+
+    private boolean active() {
+        return !closed && actions.active() && players.active();
+    }
+
     public boolean hasItem(String id) {
-        return id != null && items.containsKey(id);
+        return triggers.containsKey(id);
     }
 
     public boolean hasKey(String type) {
-        return type != null && keys.contains(key(type));
+        return keys.contains(lower(type));
     }
 
     public boolean hasKey(String id, String type) {
-        Map<String, LegacyActionTrigger> triggers = id == null ? null : items.get(id);
-        return triggers != null && type != null && triggers.containsKey(key(type));
+        return triggers.getOrDefault(id, Map.of()).containsKey(lower(type));
     }
 
     public boolean hasKeyPrefix(String prefix) {
-        if (prefix == null) return false;
-        String expected = key(prefix);
-        if (expected.equals("tick_")) return tickPrefix;
-        return keys.stream().anyMatch(value -> value.startsWith(expected));
+        return keys.stream().anyMatch(key -> key.startsWith(lower(prefix)));
     }
 
-    /** Immutable revision index; does not skip maintenance or change per-slot trigger counters. */
     public boolean hasTickSlot(int slot) {
-        return slot >= 0 && slot <= 40 && (tickSlots & (1L << slot)) != 0;
+        return slot >= 0 && slot <= 40 && (tickSlots & 1L << slot) != 0;
     }
 
     public boolean hasTickEquipment(String type) {
-        return type != null && keys.contains(type);
+        return keys.contains(type);
     }
 
     public String itemId(ItemStack item) {
-        requireThread();
-        return NiItemNodes.itemId(item);
+        ItemsService.requireThread();
+        return item == null || item.isEmpty() ? null : codec.readId(item);
     }
 
-    /** The listener cancels the vanilla event; NI sends this message without a separate cooldown. */
-    @SuppressWarnings("deprecation")
     public void broken(Player player) {
-        requireThread();
-        if (active() && brokenMessage != null && !brokenMessage.isEmpty())
-            player.sendActionBar(brokenMessage);
+        ItemsService.requireThread();
+        if (active() && !brokenMessage.isEmpty()) player.sendActionBar(brokenMessage);
     }
 
     public void interact(Player player, ItemStack item, PlayerInteractEvent event) {
         interact(player, item, event, null);
     }
 
-    /** Listener entry with a physical hand source; the public overload remains caller-owned. */
-    void interact(
-            Player player, ItemStack supplied, PlayerInteractEvent event, TriggerSource source) {
-        requireThread();
-        if (!active() || supplied == null || supplied.isEmpty()) return;
+    void interact(Player player, ItemStack item, PlayerInteractEvent event, TriggerSource source) {
+        ItemsService.requireThread();
+        if (!active() || empty(item) || event.getAction() == Action.PHYSICAL) return;
         String direction =
                 switch (event.getAction()) {
                     case LEFT_CLICK_AIR, LEFT_CLICK_BLOCK -> "left";
@@ -190,732 +203,465 @@ public final class ItemTriggers implements AutoCloseable {
         if (direction == null) return;
         String prefix = player.isSneaking() ? "shift_" : "";
         if (!hasKey(prefix + direction) && !hasKey(prefix + "all")) return;
-        String id = NiItemNodes.itemId(supplied);
+        String id = itemId(item);
         if (id == null) return;
-        LegacyActionTrigger basic = find(id, prefix + direction);
-        LegacyActionTrigger all = find(id, prefix + "all");
-        if (basic == null && all == null) return;
-        List<LegacyActionTrigger> selected =
-                basic == null ? List.of(all) : all == null ? List.of(basic) : List.of(basic, all);
-        ConsumeInfo rule = basic == null ? null : basic.getConsume();
-        if (rule == null && all != null) rule = all.getConsume();
-        // A matching interaction owns vanilla cancellation even when a source is already locked.
+        Map<String, LegacyActionTrigger> configured = triggers.get(id);
+        if (configured == null) return;
+        List<LegacyActionTrigger> selected = new ArrayList<>(2);
+        LegacyActionTrigger first = configured.get(prefix + direction);
+        LegacyActionTrigger all = configured.get(prefix + "all");
+        if (first != null) selected.add(first);
+        if (all != null) selected.add(all);
+        if (selected.isEmpty()) return;
         event.setCancelled(true);
-        dispatch(selected, rule, player, supplied, event, true, true, false, source);
+        invoke(selected, player, item, event, true, true, true, false, source, false);
     }
 
-    /**
-     * Owns the food event's inventory commit. Scripts may move or replace the live hand;
-     * neither a stale event copy nor its split remainder may overwrite those changes.
-     */
-    public void eat(PlayerItemConsumeEvent event) {
-        requireThread();
-        Player player = event.getPlayer();
-        ItemStack candidate = event.getItem();
-        if (!active() || !hasKey("eat") || candidate == null || candidate.isEmpty()) return;
-        String id = NiItemNodes.itemId(candidate);
-        LegacyActionTrigger trigger = id == null ? null : find(id, "eat");
-        if (trigger == null) return;
-        ItemIdentity identity = NiItemNodes.identity(candidate);
-        if (identity == null) return;
-        event.setCancelled(true);
-        PlayerInventory inventory = player.getInventory();
-        long session = players.session(player.getUniqueId());
-        int selected = inventory.getHeldItemSlot();
-        int slot = event.getHand() == EquipmentSlot.OFF_HAND ? 40 : selected;
-        ConsumeSlot key = new ConsumeSlot(player.getUniqueId(), slot);
-        if (eating.containsKey(key)
-                || sources.containsKey(new TriggerSource.PlayerSlot(player.getUniqueId(), slot)))
-            return;
-        EatCommit commit =
-                new EatCommit(
-                        player,
-                        inventory,
-                        slot,
-                        selected,
-                        event.getHand() == EquipmentSlot.HAND,
-                        inventory.getItem(slot));
-        returns.begin(returnOwner);
-        eating.put(key, commit);
-        delayedEventDepth++;
-        try {
-            // A preceding listener can change the event's copy independently of the source.
-            if (!commit.unchanged() || !sameStack(commit.snapshot, candidate)) return;
-            if (cooldown(trigger, player)
-                    || !active()
-                    || !commit.unchanged()
-                    || commit.interrupted
-                    || session == 0
-                    || players.session(player.getUniqueId()) != session
-                    || !allow(trigger, player, candidate, identity)
-                    || !active()) return;
-            NiActionContext context = context(player, candidate, event);
-            if (context == null) return;
-            if (!consume(
-                    trigger.getConsume(),
-                    player,
-                    candidate,
-                    context,
-                    remainder -> {
-                        commit.pending =
-                                returns.register(
-                                        returnOwner,
-                                        player,
-                                        remainder,
-                                        false,
-                                        true,
-                                        "eat slot " + slot,
-                                        commit.snapshot);
-                    },
-                    identity.id(),
-                    () ->
-                            !commit.interrupted
-                                    && commit.unchanged()
-                                    && session != 0
-                                    && players.session(player.getUniqueId()) == session)) return;
-            if (!active()
-                    || commit.interrupted
-                    || !commit.unchanged()
-                    || session == 0
-                    || players.session(player.getUniqueId()) != session) return;
-            ItemStack actual;
-            try {
-                returns.preparing(commit.pending, candidate);
-                inventory.setItem(slot, candidate);
-                actual = inventory.getItem(slot);
-                if (!sameStack(candidate, actual))
-                    throw new IllegalStateException(
-                            "Food source write did not retain its prepared value");
-                commit.committed = true;
-            } catch (RuntimeException error) {
-                // setItem may have written before throwing. Keep evidence, never guess whether
-                // restoring the source or issuing the remainder would duplicate an item.
-                if (commit.pending == null) {
-                    commit.pending =
-                            returns.register(
-                                    returnOwner,
-                                    player,
-                                    candidate,
-                                    false,
-                                    false,
-                                    "eat slot " + slot,
-                                    commit.snapshot);
-                }
-                returns.sourceUnknown(commit.pending, candidate, error);
-                return;
-            }
-            if (commit.pending != null) {
-                returns.ready(commit.pending);
-                scheduleReturn(commit.pending);
-            }
-            if (!active()
-                    || commit.interrupted
-                    || !player.isOnline()
-                    || players.session(player.getUniqueId()) != session) return;
-            // Keep invocation globals from pre, but item/NBT writes in the body target the
-            // committed inventory stack. Exhausted items have no live identity or NBT view.
-            context.set(NiContextKeys.ITEM_STACK, actual);
-            LegacyItemInfo info = inspect(actual);
-            if (info != null) {
-                Map<String, String> priorData = context.getData();
-                HashMap<String, String> data =
-                        priorData instanceof HashMap<?, ?>
-                                ? (HashMap<String, String>) priorData
-                                : priorData == null ? null : new HashMap<>(priorData);
-                info =
-                        new LegacyItemInfo(
-                                actual,
-                                info.getNbtItemStack(),
-                                info.getItemTag(),
-                                info.getNeigeItems(),
-                                info.getId(),
-                                data);
-            }
-            context.set(NiContextKeys.ITEM_INFO, info);
-            context.set(NiContextKeys.NBT, info == null ? null : info.getItemTag());
-            run(trigger, context);
-        } finally {
-            // A body may set this false; vanilla must never charge the committed item again.
-            event.setCancelled(true);
-            eating.remove(key);
-            delayedEventDepth--;
-            if (!commit.committed && commit.pending != null && !commit.pending.outcomeUnknown)
-                returns.abort(commit.pending);
-            returns.end(returnOwner);
-            finishEvent();
-        }
-    }
-
-    /** Mutates a caller-owned stack. Food inventory events must use {@link #eat}. */
     public void handle(
             String type,
             Player player,
             ItemStack item,
             Event event,
             boolean cancel,
-            boolean cancelOnCooldown,
+            boolean cooldownCancel,
             boolean consume,
             boolean delayReturn) {
-        requireThread();
-        LegacyActionTrigger trigger = lookup(type, item);
-        if (trigger == null) return;
-        dispatch(
-                List.of(trigger),
-                consume ? trigger.getConsume() : null,
-                player,
-                item,
-                event,
-                cancel,
-                cancelOnCooldown,
-                delayReturn,
-                null);
+        handleSelected(
+                type, player, item, event, cancel, cooldownCancel, consume, delayReturn, null);
     }
 
-    /** Physical event entry. Candidate edits commit once, before any trigger body can move items. */
     void handle(
             String type,
             Player player,
-            ItemStack supplied,
+            ItemStack item,
             Event event,
             boolean cancel,
-            boolean cancelOnCooldown,
+            boolean cooldownCancel,
             boolean consume,
             TriggerSource source) {
-        requireThread();
-        LegacyActionTrigger trigger = lookup(type, supplied);
-        if (trigger == null) return;
-        dispatch(
-                List.of(trigger),
-                consume ? trigger.getConsume() : null,
-                player,
-                supplied,
-                event,
-                cancel,
-                cancelOnCooldown,
-                false,
-                source);
+        handleSelected(type, player, item, event, cancel, cooldownCancel, consume, false, source);
+    }
+
+    private void handleSelected(
+            String type,
+            Player player,
+            ItemStack item,
+            Event event,
+            boolean cancel,
+            boolean cooldownCancel,
+            boolean consume,
+            boolean delay,
+            TriggerSource source) {
+        ItemsService.requireThread();
+        LegacyActionTrigger trigger = lookup(type, item);
+        if (trigger != null)
+            invoke(
+                    List.of(trigger),
+                    player,
+                    item,
+                    event,
+                    cancel,
+                    cooldownCancel,
+                    consume,
+                    delay,
+                    source,
+                    false);
     }
 
     private LegacyActionTrigger lookup(String type, ItemStack item) {
-        if (!active() || type == null || !hasKey(type) || item == null || item.isEmpty())
-            return null;
-        String id = NiItemNodes.itemId(item);
-        return id == null ? null : find(id, type);
+        if (!active() || type == null || empty(item) || !hasKey(type)) return null;
+        String id = itemId(item);
+        return id == null ? null : triggers.getOrDefault(id, Map.of()).get(lower(type));
     }
 
-    /** All gates finish before any deduction, and all physical writes finish before body execution. */
-    private void dispatch(
+    public void eat(PlayerItemConsumeEvent event) {
+        ItemsService.requireThread();
+        ItemStack candidate = event.getItem();
+        LegacyActionTrigger trigger = lookup("eat", candidate);
+        if (trigger == null) return;
+        event.setCancelled(true);
+        TriggerSource source = TriggerSource.equipment(event.getPlayer(), event.getHand());
+        invoke(
+                List.of(trigger),
+                event.getPlayer(),
+                candidate,
+                event,
+                true,
+                true,
+                true,
+                true,
+                source,
+                true);
+    }
+
+    private void invoke(
             List<LegacyActionTrigger> selected,
-            ConsumeInfo rule,
             Player player,
             ItemStack supplied,
             Event event,
             boolean cancel,
-            boolean cancelOnCooldown,
-            boolean delayReturn,
-            TriggerSource source) {
-        ItemIdentity identity = NiItemNodes.identity(supplied);
+            boolean cooldownCancel,
+            boolean consume,
+            boolean delay,
+            TriggerSource source,
+            boolean food) {
+        ItemIdentity identity = identity(supplied);
         if (identity == null) return;
-        SourceCommit commit = source == null ? null : beginSource(source, supplied);
-        if (source != null && commit == null) {
+        if (source != null && occupied.containsKey(source.key)) {
             if (cancel) cancel(event);
             return;
         }
+        if (source != null
+                && (!source.accepts(food ? source.original : supplied)
+                        || food && !Objects.equals(source.candidate(), supplied))) return;
         long session = players.session(player.getUniqueId());
-        BooleanSupplier live =
-                () ->
-                        active()
-                                && player.isOnline()
-                                && session != 0
-                                && players.session(player.getUniqueId()) == session
-                                && (commit == null || stable(commit));
-        boolean delayedCaller = source == null && delayReturn;
-        if (delayedCaller) {
-            returns.begin(returnOwner);
-            delayedEventDepth++;
-        }
-        boolean consumed = false;
-        ItemStack actual = null;
+        if (session == 0) return;
+        Invocation invocation =
+                new Invocation(player, session, identity, source, food || delay || source != null);
+        if (invocation.leased) ledger.begin(owner);
+        if (source != null) occupied.put(source.key, invocation);
+        running.add(invocation);
+        if (invocation.leased) depth++;
+        ItemStack candidate = source == null || food ? supplied : source.candidate();
+        ItemStack actual = candidate;
         try {
-            ItemStack candidate = source == null ? supplied : source.candidate();
-            if (!live.getAsBoolean()) return;
-            if (cooldown(selected.getFirst(), player)) {
-                if (cancel || cancelOnCooldown) cancel(event);
+            if (!live(invocation)
+                    || !cooldown(selected.getFirst(), player, cancel || cooldownCancel, event))
                 return;
-            }
-            if (!live.getAsBoolean() || !sameIdentity(candidate, identity)) return;
+            if (!valid(invocation, candidate)) return;
             for (LegacyActionTrigger trigger : selected) {
-                if (!allow(trigger, player, candidate, identity) || !live.getAsBoolean()) return;
+                if (!allow(trigger, invocation, candidate)) return;
             }
             if (cancel) cancel(event);
             NiActionContext context = context(player, candidate, event);
             if (context == null) return;
-            Consumer<ItemStack> remainder =
-                    commit == null
-                            ? value -> {
-                                if (delayReturn) returnLater(player, value);
-                                else returnImmediately(player, value);
-                            }
-                            : value -> stageReturn(commit, value);
-            if (!consume(rule, player, candidate, context, remainder, identity.id(), live)) return;
-            consumed = true;
-            actual = commit == null ? candidate : commitSource(commit, candidate);
-            if (commit != null && !commit.committed) return;
-            if (!active()
-                    || !player.isOnline()
-                    || players.session(player.getUniqueId()) != session
-                    || commit != null && commit.interrupted) return;
-            bindActual(context, actual);
-            ItemIdentity committedIdentity =
-                    actual == null || actual.isEmpty() ? null : NiItemNodes.identity(actual);
+            LegacyActionTrigger.ConsumeInfo consumption = selected.getFirst().getConsume();
+            if (consumption == null && selected.size() > 1)
+                consumption = selected.get(1).getConsume();
+            if (consume && !consume(consumption, invocation, candidate, context, delay)) return;
+            if (!live(invocation) || !empty(candidate) && !valid(invocation, candidate)) return;
+            if (source != null) {
+                if (invocation.returned != null) ledger.preparing(invocation.returned, candidate);
+                try {
+                    actual = source.commit(candidate, food);
+                    invocation.committed = true;
+                    if (invocation.returned != null) ledger.ready(invocation.returned);
+                } catch (RuntimeException failure) {
+                    if (invocation.returned == null) {
+                        invocation.returned =
+                                ledger.register(
+                                        owner,
+                                        player,
+                                        source.candidate(),
+                                        false,
+                                        false,
+                                        sourceName(source, food),
+                                        source.candidate());
+                    }
+                    ledger.sourceUnknown(invocation.returned, candidate, failure);
+                    return;
+                }
+                if (!sessionLive(invocation)) return;
+                if (!bind(context, actual)) return;
+            }
             for (LegacyActionTrigger trigger : selected) {
-                if (!active()
-                        || !player.isOnline()
-                        || players.session(player.getUniqueId()) != session
-                        || commit != null && (commit.interrupted || !source.ownsCommitted(actual)))
-                    break;
-                if (committedIdentity == null
-                        ? actual != null && !actual.isEmpty()
-                        : !sameIdentity(actual, committedIdentity)) break;
-                run(trigger, context);
+                if (!bodyLive(invocation, actual)) break;
+                trigger.run(context);
             }
         } finally {
-            if (consumed && event instanceof PlayerItemConsumeEvent) cancel(event);
-            if (commit != null) {
-                try {
-                    if (commit.committed) {
-                        source.synchronizeEntity(actual);
-                        if (source.entityEmpty()) cancel(event);
-                    }
-                } finally {
-                    endSource(commit);
+            if (food || invocation.consumed) cancel(event);
+            try {
+                if (source != null) {
+                    if (invocation.committed) source.synchronizeEntity(actual);
+                    if (source.entityEmpty()) cancel(event);
                 }
-            } else if (delayedCaller) {
-                delayedEventDepth--;
-                returns.end(returnOwner);
+            } finally {
+                if (source != null) occupied.remove(source.key, invocation);
+                running.remove(invocation);
+                try {
+                    if (invocation.returned != null && source != null && !invocation.committed)
+                        ledger.abort(invocation.returned);
+                } finally {
+                    if (invocation.leased) {
+                        depth--;
+                        ledger.end(owner);
+                    }
+                }
+                if (invocation.returned != null && (source == null || invocation.committed)) {
+                    if (!food && !delay) ledger.deliver(invocation.returned);
+                    ledger.schedule(invocation.returned);
+                }
                 finishEvent();
             }
         }
     }
 
-    private SourceCommit beginSource(TriggerSource source, ItemStack supplied) {
-        if (source == null || sources.containsKey(source.key)) return null;
-        if (source.key instanceof TriggerSource.PlayerSlot slot
-                && eating.containsKey(new ConsumeSlot(slot.player(), slot.slot()))) return null;
-        if (!source.accepts(supplied)) return null;
-        SourceCommit commit = new SourceCommit(source);
-        returns.begin(returnOwner);
-        sources.put(source.key, commit);
-        delayedEventDepth++;
-        return commit;
-    }
-
-    private boolean stable(SourceCommit commit) {
-        return active() && !commit.interrupted && commit.source.unchanged();
-    }
-
-    private void stageReturn(SourceCommit commit, ItemStack remainder) {
-        commit.pending =
-                returns.register(
-                        returnOwner,
-                        commit.source.player,
-                        remainder,
-                        false,
-                        true,
-                        commit.source.key.toString(),
-                        commit.source.candidate());
-    }
-
-    private ItemStack commitSource(SourceCommit commit, ItemStack candidate) {
-        if (!stable(commit)) return null;
-        ItemStack actual;
-        try {
-            returns.preparing(commit.pending, candidate);
-            actual = commit.source.commit(candidate);
-            commit.committed = true;
-        } catch (RuntimeException failure) {
-            if (commit.pending == null) {
-                commit.pending =
-                        returns.register(
-                                returnOwner,
-                                commit.source.player,
-                                candidate,
-                                false,
-                                false,
-                                commit.source.key.toString(),
-                                commit.source.candidate());
-            }
-            returns.sourceUnknown(commit.pending, candidate, failure);
-            return null;
-        }
-        if (commit.pending != null) {
-            returns.ready(commit.pending);
-        }
-        return actual;
-    }
-
-    private void endSource(SourceCommit commit) {
-        sources.remove(commit.source.key, commit);
-        delayedEventDepth--;
-        if (!commit.committed && commit.pending != null && !commit.pending.outcomeUnknown)
-            returns.abort(commit.pending);
-        returns.end(returnOwner);
-        // Keep the committed source stable through the synchronous body. Returning into an
-        // exhausted source slot before rebinding would make the context point at a dead handle.
-        try {
-            if (commit.committed && commit.pending != null) {
-                returns.deliver(commit.pending);
-                returns.schedule(commit.pending);
-            }
-        } finally {
-            finishEvent();
-        }
-    }
-
-    private void bindActual(NiActionContext context, ItemStack actual) {
-        context.set(NiContextKeys.ITEM_STACK, actual);
-        LegacyItemInfo info = inspect(actual);
-        if (info != null) {
-            Map<String, String> priorData = context.getData();
-            HashMap<String, String> data =
-                    priorData instanceof HashMap<?, ?>
-                            ? (HashMap<String, String>) priorData
-                            : priorData == null ? null : new HashMap<>(priorData);
-            info =
-                    new LegacyItemInfo(
-                            actual,
-                            info.getNbtItemStack(),
-                            info.getItemTag(),
-                            info.getNeigeItems(),
-                            info.getId(),
-                            data);
-        }
-        context.set(NiContextKeys.ITEM_INFO, info);
-        context.set(NiContextKeys.NBT, info == null ? null : info.getItemTag());
-    }
-
-    /** Tick groups count matching slot visits, rather than elapsed wall-clock time. */
-    public void tick(String type, Player player, ItemStack item) {
-        requireThread();
-        LegacyActionTrigger trigger = lookup(type, item);
-        if (trigger == null) return;
-        ItemIdentity identity = NiItemNodes.identity(item);
-        if (identity == null) return;
-        long session = players.session(player.getUniqueId());
-        long interval = trigger.getTick().value(() -> context(player, item, null), 10);
-        if (!active()
-                || !sameIdentity(item, identity)
-                || session == 0
-                || players.session(player.getUniqueId()) != session) return;
-        String counter = "TICK-" + trigger.getGroup();
-        long remaining = (Long) players.getMetadata(player.getUniqueId(), counter, 0L);
-        if (TriggerRules.skipVisit(interval, remaining)) {
-            players.setMetadata(player.getUniqueId(), counter, remaining - 1);
-            return;
-        }
-        if (!allow(trigger, player, item, identity)
-                || !active()
-                || players.session(player.getUniqueId()) != session) return;
-        NiActionContext context = context(player, item, null);
-        if (context == null) return;
-        players.setMetadata(player.getUniqueId(), counter, interval);
-        run(trigger, context);
-    }
-
-    @SuppressWarnings("deprecation")
-    private boolean cooldown(LegacyActionTrigger trigger, Player player) {
-        if (!active()) return true;
-        long duration = trigger.getCooldown().value(() -> contexts.apply(player, null), 1000);
-        if (!active()) return true;
-        long remaining =
-                players.checkCooldown(player.getUniqueId(), "ni:" + trigger.getGroup(), duration);
-        if (remaining <= 0) return false;
-        if (cooldownMessage != null && !cooldownMessage.isEmpty())
-            player.sendActionBar(
-                    cooldownMessage.replace(
-                            "{time}", String.format(Locale.ROOT, "%.1f", remaining / 1000d)));
-        return true;
-    }
-
-    private boolean allow(
-            LegacyActionTrigger trigger, Player player, ItemStack item, ItemIdentity identity) {
-        if (!active() || !sameIdentity(item, identity)) return false;
-        LegacyItemInfo info = inspect(item);
-        if (info == null) return false;
-        LegacyItemActionType type = LegacyItemActionType.matchType(key(trigger.getType()));
-        if (type != null && !new LegacyItemActionEvent(player, item, info, type, trigger).call())
-            return false;
-        return active() && sameIdentity(item, identity) && inspect(item) != null;
-    }
-
-    private static boolean sameIdentity(ItemStack item, ItemIdentity expected) {
-        try {
-            return expected.equals(NiItemNodes.identity(item));
-        } catch (RuntimeException malformed) {
-            return false;
-        }
-    }
-
-    private NiActionContext context(Player player, ItemStack item, Event event) {
-        LegacyItemInfo info = inspect(item);
-        // A legacy projection may also reject conflicting modern/legacy records even when
-        // the primary identity is unchanged. Such an item must not enter consumption.
-        if (info == null) return null;
-        NiActionContext context = contexts.apply(player, null);
-        context.set(NiContextKeys.ITEM_STACK, item);
-        context.set(NiContextKeys.ITEM_INFO, info);
-        context.set(NiContextKeys.DATA, info.getData());
-        context.set(NiContextKeys.NBT, info.getItemTag());
-        if (event != null) context.set(NiContextKeys.EVENT, event);
-        return context;
-    }
-
-    private static LegacyItemInfo inspect(ItemStack item) {
-        try {
-            return LegacyItemInfo.inspect(item);
-        } catch (RuntimeException invalidItem) {
-            return null;
-        }
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
     private boolean consume(
-            ConsumeInfo consume,
-            Player player,
+            LegacyActionTrigger.ConsumeInfo consume,
+            Invocation invocation,
             ItemStack item,
             NiActionContext context,
-            Consumer<ItemStack> returnRemainder,
-            String id,
-            BooleanSupplier validSource) {
-        ItemIdentity identity = NiItemNodes.identity(item);
-        long session = players.session(player.getUniqueId());
-        BooleanSupplier valid =
-                () ->
-                        active()
-                                && player.isOnline()
-                                && session != 0
-                                && players.session(player.getUniqueId()) == session
-                                && validSource.getAsBoolean()
-                                && identity != null
-                                && identity.id().equals(id)
-                                && sameIdentity(item, identity)
-                                && inspect(item) != null;
-        if (!valid.getAsBoolean()) return false;
+            boolean delay) {
+        if (!valid(invocation, item)) return false;
         if (consume == null) return true;
         if (consume.hasPre()) consume.getPre().eval(context);
-        if (!valid.getAsBoolean()) return false;
-        boolean condition = context.condition(consume.getCondition());
-        if (!valid.getAsBoolean()) return false;
-        if (!condition) return deny(consume, context);
-        String configured = consume.getAmount();
-        String parsed =
-                configured == null
-                        ? null
-                        : context.invoke(
-                                () ->
-                                        LegacySectionUtils.parseItemSection(
-                                                configured,
-                                                item,
-                                                context.getNbt(),
-                                                context.getData(),
-                                                player,
-                                                (Map) context.getGlobal(),
-                                                null));
-        if (!valid.getAsBoolean()) return false;
-        int amount = TriggerRules.amount(parsed);
-        if (amount <= 0 || !deduct(item, amount, context, returnRemainder))
-            return deny(consume, context);
+        if (!valid(invocation, item)) return false;
+        boolean allowed =
+                consume.getCondition() == null || context.condition(consume.getCondition());
+        if (!valid(invocation, item)) return false;
+        if (!allowed) return deny(consume, context);
+        String expanded =
+                context.invoke(
+                        () ->
+                                LegacySectionUtils.parseItemSection(
+                                        consume.getAmount(),
+                                        item,
+                                        context.getNbt(),
+                                        context.getData(),
+                                        invocation.player));
+        if (!valid(invocation, item)) return false;
+        LegacyItemInfo info = projection(item, invocation.identity);
+        if (info == null) return false;
+        Integer charge = info.getNeigeItems().getIntOrNull("charge");
+        TriggerRules.Deduction plan =
+                TriggerRules.deduct(item.getAmount(), charge, TriggerRules.amount(expanded));
+        if (plan == null) return deny(consume, context);
+        ItemStack untouched = null;
+        if (plan.returnedCount() > 0) {
+            untouched = item.clone();
+            untouched.setAmount(plan.returnedCount());
+        }
+        if (charge != null && plan.affectedCount() > 0) {
+            // The facade already exposed to pre must observe this same mutation.
+            LegacyItemInfo exposed = (LegacyItemInfo) context.get(NiContextKeys.ITEM_INFO);
+            exposed.getNeigeItems().putInt("charge", plan.charge());
+        }
+        item.setAmount(plan.affectedCount());
+        invocation.consumed = true;
+        if (untouched != null) {
+            invocation.returned =
+                    ledger.register(
+                            owner,
+                            invocation.player,
+                            untouched,
+                            invocation.source == null,
+                            true,
+                            sourceName(invocation.source, false),
+                            invocation.source == null ? null : invocation.source.candidate());
+            if (invocation.source == null && !delay) {
+                ledger.deliver(invocation.returned);
+                ledger.schedule(invocation.returned);
+            }
+        }
         return true;
     }
 
-    private boolean deny(ConsumeInfo consume, NiActionContext context) {
+    private boolean deny(LegacyActionTrigger.ConsumeInfo consume, NiActionContext context) {
         if (active() && consume.hasDeny()) consume.getDeny().eval(context);
         return false;
     }
 
-    private boolean deduct(
-            ItemStack item,
-            int amount,
-            NiActionContext context,
-            Consumer<ItemStack> returnRemainder) {
-        LegacyItemInfo info = (LegacyItemInfo) context.get(NiContextKeys.ITEM_INFO);
-        Integer charge = NiItemNodes.legacyInteger(item, "charge");
-        TriggerRules.Deduction plan = TriggerRules.deduct(item.getAmount(), charge, amount);
-        if (plan == null) return false;
-        ItemStack remainder = null;
-        if (plan.returnedCount() > 0) {
-            remainder = item.clone();
-            remainder.setAmount(plan.returnedCount());
+    private boolean cooldown(
+            LegacyActionTrigger trigger, Player player, boolean cancel, Event event) {
+        long duration = trigger.getCooldown().value(() -> contexts.apply(player, null), 1000);
+        if (!active()) return false;
+        long remaining =
+                players.checkCooldown(player.getUniqueId(), "ni:" + trigger.getGroup(), duration);
+        if (remaining <= 0) return true;
+        if (cancel) cancel(event);
+        if (!cooldownMessage.isEmpty())
+            player.sendActionBar(
+                    cooldownMessage.replace(
+                            "{time}", String.format(Locale.ROOT, "%.1f", remaining / 1000d)));
+        return false;
+    }
+
+    private boolean allow(LegacyActionTrigger trigger, Invocation invocation, ItemStack item) {
+        if (!valid(invocation, item)) return false;
+        LegacyItemInfo info = projection(item, invocation.identity);
+        if (info == null) return false;
+        LegacyItemActionType type = LegacyItemActionType.matchType(trigger.getType());
+        if (type != null
+                && !new LegacyItemActionEvent(invocation.player, item, info, type, trigger).call())
+            return false;
+        return valid(invocation, item);
+    }
+
+    private LegacyItemInfo projection(ItemStack item, ItemIdentity expected) {
+        if (empty(item)) return null;
+        try {
+            LegacyItemInfo info = LegacyItemInfo.inspect(item);
+            return info != null && expected.id().equals(info.getId()) ? info : null;
+        } catch (RuntimeException failure) {
+            return null;
         }
-        // The live facade validates a detached custom-data candidate before its sole write.
-        // Reuse this facade so references already passed to scripts observe the new charge.
-        if (charge != null && plan.affectedCount() > 0)
-            info.getNeigeItems().putInt("charge", plan.charge());
-        item.setAmount(plan.affectedCount());
-        if (remainder != null) returnRemainder.accept(remainder);
+    }
+
+    private NiActionContext context(Player player, ItemStack item, Event event) {
+        ItemIdentity identity = identity(item);
+        LegacyItemInfo info = identity == null ? null : projection(item, identity);
+        if (info == null) return null;
+        NiActionContext context = contexts.apply(player, new HashMap<>());
+        context.set(NiContextKeys.ITEM_STACK, item);
+        context.set(NiContextKeys.ITEM_INFO, info);
+        context.set(NiContextKeys.NBT, info.getItemTag());
+        context.set(NiContextKeys.DATA, info.getData());
+        if (event != null) context.set(NiContextKeys.EVENT, event);
+        return context;
+    }
+
+    private boolean bind(NiActionContext context, ItemStack actual) {
+        Map<String, String> originalData = context.getData();
+        HashMap<String, String> data =
+                originalData instanceof HashMap<String, String> map
+                        ? map
+                        : new HashMap<>(originalData);
+        context.set(NiContextKeys.ITEM_STACK, actual);
+        context.set(NiContextKeys.DATA, data);
+        if (empty(actual)) {
+            context.set(NiContextKeys.NBT, null);
+            context.set(NiContextKeys.ITEM_INFO, null);
+            return true;
+        }
+        LegacyItemInfo info = LegacyItemInfo.inspect(actual);
+        if (info == null) return false;
+        LegacyItemInfo rebound =
+                new LegacyItemInfo(
+                        actual,
+                        info.getNbtItemStack(),
+                        info.getItemTag(),
+                        info.getNeigeItems(),
+                        info.getId(),
+                        data);
+        context.set(NiContextKeys.ITEM_INFO, rebound);
+        context.set(NiContextKeys.NBT, rebound.getItemTag());
         return true;
     }
 
-    private void run(LegacyActionTrigger trigger, NiActionContext context) {
-        if (active()) trigger.run(context);
+    private boolean sessionLive(Invocation invocation) {
+        return active()
+                && !invocation.interrupted
+                && invocation.player.isOnline()
+                && players.session(invocation.player.getUniqueId()) == invocation.session;
     }
 
-    /** Takes ownership of a copy before scheduling; a scheduling failure leaves the copy pending. */
-    public void returnLater(Player player, ItemStack item) {
-        requireThread();
-        if (closed) throw new IllegalStateException("Item trigger revision is closed");
-        Objects.requireNonNull(player, "player");
-        Objects.requireNonNull(item, "item");
-        if (item.isEmpty()) return;
-        ReturnLedger.Entry pending =
-                returns.register(
-                        returnOwner, player, item, true, true, "caller-owned delayed return", null);
-        scheduleReturn(pending);
+    private boolean live(Invocation invocation) {
+        return sessionLive(invocation)
+                && (invocation.source == null || invocation.source.unchanged());
     }
 
-    private void scheduleReturn(ReturnLedger.Entry pending) {
-        returns.schedule(pending);
+    private boolean valid(Invocation invocation, ItemStack item) {
+        return live(invocation)
+                && invocation.identity.equals(identity(item))
+                && projection(item, invocation.identity) != null;
     }
 
-    private void returnImmediately(Player player, ItemStack item) {
-        ReturnLedger.Entry pending =
-                returns.register(
-                        returnOwner,
-                        player,
-                        item,
-                        true,
-                        true,
-                        "caller-owned immediate return",
-                        null);
-        returns.deliver(pending);
-        returns.schedule(pending);
+    private boolean bodyLive(Invocation invocation, ItemStack item) {
+        if (!sessionLive(invocation)) return false;
+        if (invocation.source != null && !invocation.source.ownsCommitted(item)) return false;
+        return empty(item) || invocation.identity.equals(identity(item));
     }
 
-    /** Flush deferred close/quit returns once all enclosing source commits have finished. */
-    public void finishEvent() {
-        requireThread();
-        if (delayedEventDepth != 0) return;
-        for (ReturnLedger.Entry pending : returns.entries(returnOwner)) {
-            if (closed || returnAfterCommit.contains(pending.player)) returns.deliver(pending);
+    private ItemIdentity identity(ItemStack item) {
+        try {
+            return empty(item) ? null : codec.read(item).orElse(null);
+        } catch (RuntimeException malformed) {
+            return null;
         }
-        returnAfterCommit.clear();
     }
 
-    /** Complete inventory conservation before a player's quit state is removed. */
-    public void flushReturns(Player player) {
-        requireThread();
-        UUID id = player.getUniqueId();
-        for (var entry : eating.entrySet())
-            if (entry.getKey().player.equals(id)) entry.getValue().interrupted = true;
-        for (SourceCommit commit : sources.values())
-            if (commit.source.player.getUniqueId().equals(id)) commit.interrupted = true;
-        if (delayedEventDepth > 0) {
-            returnAfterCommit.add(id);
+    public void tick(String type, Player player, ItemStack item) {
+        ItemsService.requireThread();
+        LegacyActionTrigger trigger = lookup(type, item);
+        if (trigger == null) return;
+        ItemIdentity identity = identity(item);
+        long session = players.session(player.getUniqueId());
+        if (identity == null || session == 0) return;
+        Invocation invocation = new Invocation(player, session, identity, null, false);
+        long interval = trigger.getTick().value(() -> context(player, item, null), 10);
+        if (!valid(invocation, item)) return;
+        String key = "TICK-" + trigger.getGroup();
+        long remaining = (Long) players.getMetadata(player.getUniqueId(), key, 0L);
+        if (TriggerRules.skipVisit(interval, remaining)) {
+            players.setMetadata(player.getUniqueId(), key, remaining - 1);
             return;
         }
-        returns.flush(player);
+        if (!allow(trigger, invocation, item)) return;
+        NiActionContext context = context(player, item, null);
+        if (context == null) return;
+        players.setMetadata(player.getUniqueId(), key, interval);
+        trigger.run(context);
     }
 
-    private boolean active() {
-        return !closed && actions.active() && players.active();
+    public void returnLater(Player player, ItemStack item) {
+        ItemsService.requireThread();
+        if (closed || player == null || empty(item)) return;
+        ReturnLedger.Entry entry =
+                ledger.register(owner, player, item, true, true, "owned-return", null);
+        ledger.schedule(entry);
     }
 
-    private LegacyActionTrigger find(String id, String type) {
-        Map<String, LegacyActionTrigger> triggers = items.get(id);
-        return triggers == null ? null : triggers.get(key(type));
+    public void finishEvent() {
+        ItemsService.requireThread();
+        if (depth != 0) return;
+        if (closed) for (ReturnLedger.Entry entry : ledger.entries(owner)) ledger.deliver(entry);
+        List<Player> pending = new ArrayList<>(deferredFlush);
+        deferredFlush.clear();
+        for (Player player : pending) ledger.flush(player);
     }
 
-    private static String key(String value) {
-        return value.toLowerCase(Locale.getDefault());
+    public void flushReturns(Player player) {
+        ItemsService.requireThread();
+        for (Invocation invocation : running) {
+            if (invocation.player.getUniqueId().equals(player.getUniqueId()))
+                invocation.interrupted = true;
+        }
+        if (depth != 0) deferredFlush.add(player);
+        else ledger.flush(player);
+    }
+
+    @Override
+    public void close() {
+        ItemsService.requireThread();
+        if (closed) return;
+        closed = true;
+        finishEvent();
     }
 
     private static void cancel(Event event) {
         if (event instanceof Cancellable cancellable) cancellable.setCancelled(true);
     }
 
-    private static void requireThread() {
-        if (!Bukkit.isPrimaryThread())
-            throw new IllegalStateException("Item trigger operation requires the server thread");
+    private static boolean empty(ItemStack item) {
+        return item == null || item.isEmpty();
     }
 
-    @Override
-    public void close() {
-        requireThread();
-        if (closed) return;
-        closed = true;
-        // In-flight food transactions abort before writing, or already own a committed source.
-        // Their finally blocks flush only returns explicitly marked ready after that write.
-        if (delayedEventDepth == 0) finishEvent();
+    private static String sourceName(TriggerSource source, boolean food) {
+        return source == null ? "caller-item" : (food ? "eat:" : "physical:") + source.key;
     }
 
-    private static NiConfig config(Object source) {
-        if (source instanceof NiConfig config) return config;
-        if (!(source instanceof Map<?, ?> map)) return null;
-        Map<String, Object> values = new LinkedHashMap<>();
-        map.forEach((key, value) -> values.put(String.valueOf(key), value));
-        return new NiConfig(values);
-    }
-
-    /** Implements the optional old format upgrade in memory, retaining every input file verbatim. */
-    private static NiConfig normalize(NiConfig source, boolean upgrade) {
-        return TriggerRules.normalize(source, upgrade);
-    }
-
-    private record ConsumeSlot(UUID player, int slot) {}
-
-    private static final class SourceCommit {
-        final TriggerSource source;
-        ReturnLedger.Entry pending;
-        boolean interrupted, committed;
-
-        SourceCommit(TriggerSource source) {
-            this.source = source;
-        }
-    }
-
-    private static boolean sameStack(ItemStack first, ItemStack second) {
-        return first == null || first.isEmpty()
-                ? second == null || second.isEmpty()
-                : first.equals(second);
-    }
-
-    private static final class EatCommit {
+    private static final class Invocation {
         final Player player;
-        final PlayerInventory inventory;
-        final int slot, selected;
-        final boolean mainHand;
-        final ItemStack source, snapshot;
-        final net.minecraft.world.item.ItemStack handle;
-        ReturnLedger.Entry pending;
-        boolean interrupted, committed;
+        final long session;
+        final ItemIdentity identity;
+        final TriggerSource source;
+        final boolean leased;
+        ReturnLedger.Entry returned;
+        boolean interrupted;
+        boolean consumed;
+        boolean committed;
 
-        EatCommit(
+        Invocation(
                 Player player,
-                PlayerInventory inventory,
-                int slot,
-                int selected,
-                boolean mainHand,
-                ItemStack source) {
+                long session,
+                ItemIdentity identity,
+                TriggerSource source,
+                boolean leased) {
             this.player = player;
-            this.inventory = inventory;
-            this.slot = slot;
-            this.selected = selected;
-            this.mainHand = mainHand;
+            this.session = session;
+            this.identity = identity;
             this.source = source;
-            snapshot = source == null ? null : source.clone();
-            handle = source instanceof CraftItemStack ? CraftItemStack.unwrap(source) : null;
-        }
-
-        boolean unchanged() {
-            if (!player.isOnline() || mainHand && inventory.getHeldItemSlot() != selected)
-                return false;
-            ItemStack current = inventory.getItem(slot);
-            boolean sameReference =
-                    handle == null
-                            ? current == source
-                            : current instanceof CraftItemStack
-                                    && CraftItemStack.unwrap(current) == handle;
-            return sameReference && sameStack(snapshot, current);
+            this.leased = leased;
         }
     }
 }

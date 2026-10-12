@@ -1,27 +1,11 @@
 package dev.itemloom.compat.ni;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-/** NI's typed numeric strings and array conventions, detached from a particular NBT library. */
 public final class NiTagValues {
     private NiTagValues() {}
 
     public static Object decode(Object value) {
-        if (value instanceof String text) {
-            Object decoded = scalar(text);
-            if (decoded != text) return decoded;
-            if (text.startsWith("[") && text.endsWith("]")) {
-                List<Object> values = new ArrayList<>();
-                for (String part : text.substring(1, text.length() - 1).split(",", -1))
-                    values.add(scalar(part));
-                Object array = array(values);
-                if (array != null) return array;
-            }
-            return text;
-        }
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();
             map.forEach(
@@ -31,56 +15,68 @@ public final class NiTagValues {
             return result;
         }
         if (value instanceof List<?> list) {
-            List<Object> values = new ArrayList<>();
-            for (Object child : list)
-                if (child != null) values.add(child instanceof String text ? scalar(text) : child);
-            Object array = array(values);
+            List<Object> decoded = new ArrayList<>();
+            for (Object entry : list)
+                if (entry != null) decoded.add(entry instanceof String text ? scalar(text) : entry);
+            Object array = array(decoded);
             if (array != null) return array;
-            List<Object> result = new ArrayList<>();
-            for (Object child : values) result.add(decode(child));
-            return result;
+            return decoded.stream()
+                    .map(
+                            entry ->
+                                    entry instanceof Map<?, ?> || entry instanceof List<?>
+                                            ? decode(entry)
+                                            : entry)
+                    .toList();
+        }
+        if (value instanceof String text) {
+            if (text.startsWith("[") && text.endsWith("]")) {
+                List<Object> decoded =
+                        Arrays.stream(text.substring(1, text.length() - 1).split(",", -1))
+                                .map(NiTagValues::scalar)
+                                .toList();
+                Object array = array(decoded);
+                return array == null ? text : array;
+            }
+            return scalar(text);
         }
         return value;
     }
 
     private static Object scalar(String value) {
-        if (!value.startsWith("(")) return value;
         int end = value.indexOf(") ");
-        if (end < 0) return value;
-        String type = value.substring(1, end), content = value.substring(end + 2);
+        if (end < 0 || !value.startsWith("(")) return value;
+        String body = value.substring(end + 2);
         try {
-            return switch (type) {
-                case "String" -> content;
-                case "Byte" -> Byte.valueOf(content);
-                case "Short" -> Short.valueOf(content);
-                case "Int" -> Integer.valueOf(content);
-                case "Long" -> Long.valueOf(content);
-                case "Float" -> Float.valueOf(content);
-                case "Double" -> Double.valueOf(content);
+            return switch (value.substring(1, end)) {
+                case "String" -> body;
+                case "Byte" -> Byte.valueOf(body);
+                case "Short" -> Short.valueOf(body);
+                case "Int" -> Integer.valueOf(body);
+                case "Long" -> Long.valueOf(body);
+                case "Float" -> Float.valueOf(body);
+                case "Double" -> Double.valueOf(body);
                 default -> value;
             };
-        } catch (NumberFormatException ignored) {
+        } catch (NumberFormatException error) {
             return value;
         }
     }
 
-    private static Object array(List<?> values) {
+    private static Object array(List<Object> values) {
         if (values.isEmpty()) return null;
-        Object first = values.get(0);
-        if (first instanceof Byte) {
+        if (values.get(0) instanceof Byte) {
             byte[] result = new byte[values.size()];
-            for (int i = 0; i < result.length; i++) result[i] = ((Byte) values.get(i)).byteValue();
+            for (int i = 0; i < result.length; i++) result[i] = (Byte) values.get(i);
             return result;
         }
-        if (first instanceof Integer) {
+        if (values.get(0) instanceof Integer) {
             int[] result = new int[values.size()];
-            for (int i = 0; i < result.length; i++)
-                result[i] = ((Integer) values.get(i)).intValue();
+            for (int i = 0; i < result.length; i++) result[i] = (Integer) values.get(i);
             return result;
         }
-        if (first instanceof Long) {
+        if (values.get(0) instanceof Long) {
             long[] result = new long[values.size()];
-            for (int i = 0; i < result.length; i++) result[i] = ((Long) values.get(i)).longValue();
+            for (int i = 0; i < result.length; i++) result[i] = (Long) values.get(i);
             return result;
         }
         return null;

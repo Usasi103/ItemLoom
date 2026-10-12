@@ -1,93 +1,79 @@
 package dev.itemloom.paper.compat.script;
 
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
-/** Literal display edits selected against original text before any output is produced. */
+/** Selects literal spans in the input before rendering any replacement. */
 public final class LegacyLiteralText {
-    private LegacyLiteralText() {}
-
-    private record Match(int start, String key, String replacement) {
+    private record Match(int start, String key) {
         int end() {
             return start + key.length();
         }
     }
 
+    private LegacyLiteralText() {}
+
     public static String name(String source, Map<String, String> rules, boolean all) {
-        return edit(source, rules, all, new HashSet<>(), false).getFirst();
+        return render(source, rules, all, new HashSet<>(), false).getFirst();
     }
 
     public static List<String> lore(List<String> source, Map<String, String> rules, boolean all) {
-        Set<String> used = new HashSet<>();
         List<String> result = new ArrayList<>();
-        for (String line : source) result.addAll(edit(line, rules, all, used, true));
+        Set<String> used = new HashSet<>();
+        for (String line : source) result.addAll(render(line, rules, all, used, true));
         return result;
     }
 
-    private static List<Match> select(String source, Map<String, String> rules) {
+    private static List<String> render(
+            String source,
+            Map<String, String> rules,
+            boolean all,
+            Set<String> used,
+            boolean split) {
         List<Match> candidates = new ArrayList<>();
-        rules.forEach(
-                (key, replacement) -> {
-                    if (key.isEmpty()) return;
-                    for (int start = source.indexOf(key);
-                            start >= 0;
-                            start = source.indexOf(key, start + 1)) {
-                        candidates.add(new Match(start, key, replacement));
-                    }
-                });
+        for (String key : rules.keySet()) {
+            if (key.isEmpty()) continue;
+            for (int from = 0, at; (at = source.indexOf(key, from)) >= 0; from = at + 1)
+                candidates.add(new Match(at, key));
+        }
         candidates.sort(
-                Comparator.<Match>comparingInt(match -> match.key().length())
+                Comparator.<Match>comparingInt(match -> match.key.length())
                         .reversed()
                         .thenComparingInt(Match::start));
         BitSet occupied = new BitSet(source.length());
         List<Match> selected = new ArrayList<>();
         for (Match match : candidates) {
-            int nextOccupied = occupied.nextSetBit(match.start());
-            if (nextOccupied >= 0 && nextOccupied < match.end()) continue;
-            occupied.set(match.start(), match.end());
+            int next = occupied.nextSetBit(match.start);
+            if (next >= 0 && next < match.end()) continue;
+            occupied.set(match.start, match.end());
             selected.add(match);
         }
         selected.sort(Comparator.comparingInt(Match::start));
-        return selected;
-    }
-
-    private static List<String> edit(
-            String source,
-            Map<String, String> rules,
-            boolean all,
-            Set<String> used,
-            boolean splitReplacements) {
-        List<String> lines = new ArrayList<>();
+        List<String> result = new ArrayList<>();
         StringBuilder line = new StringBuilder();
-        int copied = 0;
-        for (Match match : select(source, rules)) {
-            line.append(source, copied, match.start());
-            boolean replace = all || used.add(match.key());
-            String replacement = replace ? match.replacement() : match.key();
-            boolean inserted = replace && replacement != null;
-            if (replacement == null && !all) replacement = match.key();
-            if (replacement != null) {
-                if (splitReplacements && inserted) {
-                    int start = 0;
-                    for (int end = replacement.indexOf('\n');
-                            end >= 0;
-                            end = replacement.indexOf('\n', start)) {
-                        line.append(replacement, start, end);
-                        lines.add(line.toString());
+        int cursor = 0;
+        for (Match match : selected) {
+            line.append(source, cursor, match.start);
+            String replacement = rules.get(match.key);
+            boolean apply = all || used.add(match.key);
+            if (!apply || (!all && replacement == null))
+                line.append(source, match.start, match.end());
+            else if (replacement != null) {
+                if (!split) line.append(replacement);
+                else {
+                    int from = 0, newline;
+                    while ((newline = replacement.indexOf('\n', from)) >= 0) {
+                        line.append(replacement, from, newline);
+                        result.add(line.toString());
                         line.setLength(0);
-                        start = end + 1;
+                        from = newline + 1;
                     }
-                    line.append(replacement, start, replacement.length());
-                } else line.append(replacement);
+                    line.append(replacement, from, replacement.length());
+                }
             }
-            copied = match.end();
+            cursor = match.end();
         }
-        lines.add(line.append(source, copied, source.length()).toString());
-        return lines;
+        line.append(source, cursor, source.length());
+        result.add(line.toString());
+        return result;
     }
 }
