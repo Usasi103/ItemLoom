@@ -14,6 +14,7 @@ ItemLoom is an open-source item plugin for **Paper 26.2 and Java 25**. Start wit
 - **Rewards**: Item packs, shared or bag-specific weighted lists, and MythicMobs item drop tables for loot bags opened with a right click.
 - **Administration**: Browse and search the catalog, inspect held items, save snapshots, and generate items in batches with parameters.
 - **Player-specific display**: Optional `client_bound_data` creates display copies for the receiving player. The server resolves their content before sending it.
+- **Equipment comparison**: Compare values and roll bars with the viewer's equipped items. Configure slots, stat mappings and glyphs, or register accessory and percentage-stat providers.
 
 ## Quick start
 

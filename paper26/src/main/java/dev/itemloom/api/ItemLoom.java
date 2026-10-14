@@ -31,6 +31,22 @@ public interface ItemLoom {
     /** Register a snapshot of a provider. IDs are namespace:localId; duplicates fail without replacement. */
     ProviderRegistration registerProvider(Plugin owner, String namespace, ItemProvider provider);
 
+    /** Main-thread registration; removed on owner disable or ItemLoom shutdown. */
+    ProviderRegistration registerEquipmentProvider(Plugin owner, EquipmentProvider provider);
+
+    /** Main-thread registration; the latest non-null stat result wins, with PDC fallback. */
+    ProviderRegistration registerComparisonStatProvider(
+            Plugin owner, ComparisonStatProvider provider);
+
+    /** Queue an updated equipment/base snapshot after a provider's own state changes. Main thread. */
+    void refreshComparison(org.bukkit.entity.Player viewer);
+
+    /** Register an immutable candidate by its native/legacy comparison uid. Main thread. */
+    void registerComparisonCandidate(org.bukkit.entity.Player viewer, ItemStack item);
+
+    /** Compare with complete candidate stats rather than a single placeholder value. Main thread. */
+    String compare(org.bukkit.entity.Player viewer, ItemStack item, String parameters);
+
     Set<String> groupIds();
 
     java.util.List<ItemStack> createGroup(

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2.7.0",
+  "version": "2.8.0",
   "review_date": "2026-10-14",
   "baseline_commit": "03f5da3945c22f6ae9aa504abd7b8365bbbea06c",
   "baseline_project_files_reviewed": 152,
@@ -9,7 +9,8 @@
     "Retention is an engineering review decision, not proof of historical independent authorship.",
     "Contracts and permitted API surfaces were supplied to fresh implementation workers; coordinator had source exposure.",
     "No legal clean-room certification; GPL, upstream attribution and public history remain.",
-    "Exact dependency binaries and matching SnakeYAML fork sources are pinned separately. Tests/fixtures are not certified as independently authored; bytecode correspondence does not certify legal ownership or erase historical source exposure."
+    "Exact dependency binaries and matching SnakeYAML fork sources are pinned separately. Tests/fixtures are not certified as independently authored; bytecode correspondence does not certify legal ownership or erase historical source exposure.",
+    "The 2.8.0 comparison integration was reviewed with exposure to project-owned GearCompare source and actual CraftEngine interface bytecode; no claim of clean-room authorship. Server-specific content is excluded."
   ],
   "files": {
     "compat-ni/src/main/java/dev/itemloom/compat/ni/NiArithmetic.java": {
@@ -252,6 +253,26 @@
       "reason": "Pure rebuild rules shared by the Bukkit layer and tests: custom durability clamp and the requested-roll carry check.",
       "sha256_lf": "f6921a053fe62780ebf02db51151c911f83f381a3cc694b8ae5e02b38d170adf"
     },
+    "core/src/main/java/dev/itemloom/core/compare/Comparison.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Retain generic GearCompare decimal, placeholder and Division bar contracts; add configurable stat groups and base-aware complete-candidate comparison without platform access.",
+      "sha256_lf": "8a94ffbd8c1b8dacfc4f5f4f9a2ef4551489dceea148d470e32eda72eaa3755e"
+    },
+    "core/src/main/java/dev/itemloom/core/compare/ComparisonModel.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Retain immutable comparison settings, slot state, viewer base totals and complete candidate values for cross-thread snapshot publication.",
+      "sha256_lf": "a3cbcd9e2fa2c2d0c389ad72e9161245c4dcf1e58c857abc0204e0b0d8ab6618"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ComparisonStatProvider.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Minimal public live-stat and raw-base contract with explicit PDC fallback semantics and configurable provider keys.",
+      "sha256_lf": "9d4d1e54e5941f70604792739283060e162e98a2be61907cc8868027df827a31"
+    },
+    "paper26/src/main/java/dev/itemloom/api/EquipmentProvider.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Minimal public equipment and eligibility contract for independently owned slot providers; no private plugin dependency.",
+      "sha256_lf": "894daa6bd623c2b6bb4406f3e6c1313d78cb0d5290434d2a20995a04390c0f73"
+    },
     "paper26/src/main/java/dev/itemloom/api/ItemActionEvent.java": {
       "classification": "A",
       "reason": "Bukkit Event/Cancellable/HandlerList template with ItemLoom trigger key, nullable async constructor boundary for adapters. Getter and cancellation boilerplate is standard API mechanics.",
@@ -274,8 +295,8 @@
     },
     "paper26/src/main/java/dev/itemloom/api/ItemLoom.java": {
       "classification": "A",
-      "reason": "Own ServicesManager-facing API, providers/groups/save/identity contracts. No promise of arbitrary NI/SX Java API; interfaces contain no substantial implementation. 2.7.0 adds rebuild(item, viewer, overrides, keepPdcKeys) and the KEEP_ALL_PDC constant.",
-      "sha256_lf": "eb9e9e8ec301bec5272cf0b4a42824f8f80d33918ccb0b055c5db163a0c525fc"
+      "reason": "Own ServicesManager-facing API, providers/groups/save/identity contracts. No promise of arbitrary NI/SX Java API; interfaces contain no substantial implementation. 2.7.0 adds rebuild(item, viewer, overrides, keepPdcKeys) and the KEEP_ALL_PDC constant. Reviewed 2.8.0 generic comparison provider/candidate APIs and lifecycle composition; existing rebuild contract retained.",
+      "sha256_lf": "6803df717d813a904e0bb812843708cd8ddb6748789cbcd51a0656bff2df11c5"
     },
     "paper26/src/main/java/dev/itemloom/api/ItemProvider.java": {
       "classification": "A",
@@ -299,8 +320,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/ItemLoomPlugin.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace plugin initialization, input-root fallback, optional bridge/service publication and partial-startup shutdown cleanup.",
-      "sha256_lf": "90539a5895a9df38b22e76636e0447497bf23d8251d69a813afa3ee234b9630d"
+      "reason": "Replace plugin initialization, input-root fallback, optional bridge/service publication and partial-startup shutdown cleanup. Reviewed 2.8.0 generic comparison provider/candidate APIs and lifecycle composition; existing rebuild contract retained.",
+      "sha256_lf": "5fb3dbda3a531f65bddb783e41cb12756e64d7ca66fec2d060aa6e3b7d977742"
     },
     "paper26/src/main/java/dev/itemloom/paper/ItemProviders.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -309,8 +330,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/ItemsService.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace combined catalog preparation/publication, provider collision fences and service-lifetime player/return state using typed runtime capabilities. 2.7.0 adds the rebuild entry point with identity, provider, owner and post-generation checks.",
-      "sha256_lf": "342e4fa54176384b340af084cf1067f78d6a7a2efab363c6549abb6e86bc4a83"
+      "reason": "Replace combined catalog preparation/publication, provider collision fences and service-lifetime player/return state using typed runtime capabilities. 2.7.0 adds the rebuild entry point with identity, provider, owner and post-generation checks. Reviewed 2.8.0 generic comparison provider/candidate APIs and lifecycle composition; existing rebuild contract retained.",
+      "sha256_lf": "8501eb3a6440a026a1e64009047e25c1ba920131316a8c99c5fe0984359eefd6"
     },
     "paper26/src/main/java/dev/itemloom/paper/action/ActionInputCapture.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -421,6 +442,21 @@
       "classification": "contract-replacement-or-reviewed-integration",
       "reason": "Replace command registration, browsing/inspection/save flows and bounded give jobs with generation/publication fences.",
       "sha256_lf": "d4d93f5334ebd215214b34963b59f9f55c168ca4173be99147d7f5fde058f02a"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compare/ComparisonConfig.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Read and validate the generic comparison configuration in the existing full reload transaction; server names and artwork remain outside the repository.",
+      "sha256_lf": "1061a19c1c88dc7953032ec9b322130d7a9e2d11b403c7d73e718914c8de341b"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compare/ComparisonListener.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Retain equipment-related Paper event coverage from project-owned GearCompare; coalesce main-thread refreshes and rely on value changes to avoid unrelated inventory resends.",
+      "sha256_lf": "608d0ca067955683cfa4a16fd0f10633f5be64ed0aabb46368bc84a337521d72"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/compare/EquipmentComparison.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Main-thread provider ownership and bounded candidate/inventory snapshots; immediate final-generation publication and creative cursor preservation; asynchronous requests access immutable values only.",
+      "sha256_lf": "0a57e2a08b44fdfc3bd0ba9cf033b8759405db28c029437470db5484942dade6"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/InventoryRequirements.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -706,6 +742,16 @@
       "classification": "contract-replacement-or-reviewed-integration",
       "reason": "Replace exact detached snapshots of mutable and nested components without whole-stack normalization or loss of explicit removals.",
       "sha256_lf": "89bc7e15102665b35c6ac970f38fba721e0d17a1a811e592bb469df05f9ae54f"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/ComparisonExpansion.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Isolate optional PAPI types; register native itemloom and retained gearcompare comparison contracts without live inventory reads.",
+      "sha256_lf": "84ce0371e39a1257699083afc18c268695c8801d547146b834db19fead53b218"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/integration/CraftEngineSource.java": {
+      "classification": "reviewed-generic-comparison-integration",
+      "reason": "Optional adapter for the actual CraftEngine 26.9.1 public ItemSource/registerItemSource interfaces; native ItemLoom identity, no CE binaries or injected classes.",
+      "sha256_lf": "38ad63df5ef82a8abb036498a3ecdc01b4b6a8be2822982da4218ed27277ed8a"
     },
     "paper26/src/main/java/dev/itemloom/paper/integration/ExternalItemMaterial.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -1142,12 +1188,13 @@
     "gradle.properties": {
       "classification": "reviewed-build-resource-or-audit-input",
       "reason": "Select the formal 2.7.0 release without changing the reviewed toolchain or runtime dependencies.",
-      "sha256_lf": "7f3e93176b7e7af1461552acd84d078dde89d43dee4cb9688bb8f2aec94a99d6"
+      "sha256_lf": "7679a82fa3dbffcce9b5d65a384d41c15c9259b1f6a1c5af637a3b19030cfecc"
     },
     "gradle/wrapper/gradle-wrapper.jar": {
       "classification": "retained-build-bootstrap",
       "reason": "Existing Gradle wrapper/bootstrap required for reproducible public builds; supplied Gradle copyright/license notices retained. Binary is a build tool, never a plugin runtime input.",
-      "sha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17"
+      "sha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17",
+      "sha256_lf": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17"
     },
     "gradle/wrapper/gradle-wrapper.properties": {
       "classification": "retained-build-bootstrap",
@@ -1238,6 +1285,11 @@
       "classification": "attributed-legal-text",
       "reason": "Necessary complete license/copyright/source notice for explicitly included project or dependency; kept with exact-version origin evidence and packaged notice checks.",
       "sha256_lf": "cd159aaa2941fb56816ca0fd030e153d49cc7157a17b1936ba3f079852c56401"
+    },
+    "paper26/src/main/resources/comparison.yml": {
+      "classification": "reviewed-generic-configuration",
+      "reason": "Native comparison defaults with configurable equipment positions, provider mapping, output and font advances; no server-specific keys, images or resource pack.",
+      "sha256_lf": "9a95cf84443b2fe171ac99ba21c69c3bec022f3382401b20075d8e002a2f1361"
     },
     "paper26/src/main/resources/compat-sx/legacy-materials-26.2.tsv": {
       "classification": "observed-platform-format-data",

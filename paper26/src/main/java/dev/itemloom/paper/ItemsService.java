@@ -1,6 +1,11 @@
 package dev.itemloom.paper;
 
 import dev.itemloom.api.ItemLoom;
+import dev.itemloom.api.EquipmentProvider;
+import dev.itemloom.api.ComparisonStatProvider;
+import dev.itemloom.paper.compare.ComparisonConfig;
+import dev.itemloom.paper.compare.EquipmentComparison;
+import dev.itemloom.core.compare.ComparisonModel.Settings;
 import dev.itemloom.api.ItemProvider;
 import dev.itemloom.api.ItemRebuildResult;
 import dev.itemloom.api.ItemsReloadEvent;
@@ -63,6 +68,7 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
     private final ItemStateCodec identity = new ItemStateCodec();
     private final PlayerActionState players = new PlayerActionState();
     private final ItemProviders providers = new ItemProviders();
+    private final EquipmentComparison comparison;
     private final LootBags bags;
     private final DropVisibility visibility;
     private final ItemDisplayService display;
@@ -97,6 +103,10 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
             Path returnLedger) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.inputRoot = Objects.requireNonNull(inputRoot, "inputRoot");
+        if (!plugin.getDataFolder().toPath().resolve("comparison.yml").toFile().exists()) {
+            plugin.saveResource("comparison.yml", false);
+        }
+        comparison = new EquipmentComparison(plugin);
         players.initializeReturns(plugin, Objects.requireNonNull(returnLedger, "returnLedger"));
         bags =
                 new LootBags(
@@ -157,9 +167,11 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
         }
         reloading = true;
         PreparedRuntime candidate = null;
+        Settings comparisonSettings = null;
         try {
             try (ReloadTransaction transaction = ReloadTransaction.begin()) {
                 try {
+                    comparisonSettings = ComparisonConfig.read(plugin);
                     candidate = loader.prepare(revision + 1);
                     providers.validate(configuredIds(candidate.snapshot(), true));
                     candidate.verifySourcesUnchanged();
@@ -183,6 +195,7 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
             installed = candidate;
             current = next;
             candidate = null;
+            comparison.install(comparisonSettings);
             try {
                 players.configure(next.policies().resetCooldownOnQuit());
                 for (Player player : Bukkit.getOnlinePlayers()) {
@@ -242,6 +255,7 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
         manager.registerEvents(ownership, plugin);
         manager.registerEvents(secondaryMaintenance, plugin);
         display.start();
+        comparison.start();
         visibility.start();
         ticker =
                 Bukkit.getScheduler()
@@ -345,12 +359,17 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
         }
         Map<String, String> rolls = copyRolls(savedRolls);
         if (provided) {
-            return providers.create(id, viewer, rolls);
+            ItemStack result = providers.create(id, viewer, rolls);
+            comparison.remember(viewer == null ? null : viewer.getPlayer(), result);
+            return result;
         }
         if (selected == null) {
             throw new IllegalArgumentException("Unknown item: " + id);
         }
-        return Objects.requireNonNull(selected.create(id, viewer, rolls), "Generated item");
+        ItemStack result =
+                Objects.requireNonNull(selected.create(id, viewer, rolls), "Generated item");
+        comparison.remember(viewer == null ? null : viewer.getPlayer(), result);
+        return result;
     }
 
     @Override
@@ -358,6 +377,42 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
             Plugin owner, String namespace, ItemProvider provider) {
         RuntimeSnapshot captured = requireLoaded();
         return providers.register(owner, namespace, provider, configuredIds(captured, true));
+    }
+
+    @Override
+    public ProviderRegistration registerEquipmentProvider(
+            Plugin owner, EquipmentProvider provider) {
+        requireLoaded();
+        return comparison.register(owner, provider);
+    }
+
+    @Override
+    public ProviderRegistration registerComparisonStatProvider(
+            Plugin owner, ComparisonStatProvider provider) {
+        requireLoaded();
+        return comparison.register(owner, provider);
+    }
+
+    @Override
+    public void refreshComparison(Player viewer) {
+        requireLoaded();
+        comparison.schedule(Objects.requireNonNull(viewer));
+    }
+
+    @Override
+    public void registerComparisonCandidate(Player viewer, ItemStack item) {
+        requireLoaded();
+        comparison.remember(viewer, item);
+    }
+
+    @Override
+    public String compare(Player viewer, ItemStack item, String parameters) {
+        requireLoaded();
+        return comparison.compare(Objects.requireNonNull(viewer), item, parameters);
+    }
+
+    public String comparisonPlaceholder(java.util.UUID viewer, String parameters) {
+        return comparison.request(viewer, parameters);
     }
 
     @Override
@@ -621,6 +676,7 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
         }
         cleanup(bags::close, "loot bags");
         cleanup(providers::close, "providers");
+        cleanup(comparison::close, "equipment comparison");
         cleanup(visibility::close, "drop visibility");
         HandlerList.unregisterAll(this);
         HandlerList.unregisterAll(events);

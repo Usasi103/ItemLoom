@@ -115,6 +115,14 @@ probes alongside the unit tests for execution paths outside this observation set
 Synthetic players and events do not test actual client rendering, prediction, or network load.
 Record real-client and stress testing separately. Do not load the probe on a live server.
 
+For equipment comparison, run `ilprobe equipment-comparison`. The probe temporarily changes
+`comparison.yml`, restores its exact original bytes, and checks complete candidate publication,
+PDC formats, provider eligibility, asynchronous snapshot reads, creative cursor preservation,
+and rejected reloads. Installing PlaceholderAPI adds native/legacy identifier checks; installing
+CraftEngine 26.9.1 adds checks against its actual public ItemSource registry, build and identity
+API. Inspect the JSON checks as well as `passed`. It uses a synthetic player and does not verify
+real client packets, resource-pack glyph rendering, recipe combinations or load behavior.
+
 ## Configuration census
 
 `tools/inventory.py` reads configuration and script text without executing scripts or

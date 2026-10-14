@@ -1,6 +1,6 @@
 # ItemLoom 使用说明
 
-适用于 `2.7.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+适用于 `2.8.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
 
 集合节点的随机实现保留权重、重复项及缓存规则，但不保证同一个随机种子的逐次结果与旧版本相同。已保存的锁定随机值仍按原配置规则读取。
 
@@ -50,6 +50,73 @@ SXBridgeBlade:
 会把在线玩家传给提供者；ItemLoom 的随机参数、节点和锁定值仍由本插件展开，不自动注入外部插件的参数命名空间。外部物品不进入静态成品缓存，因此每次都能获得提供者的最新或按玩家生成的结果。提供者缺失、停用、物品不存在或 API 不兼容时生成失败并报告来源，不改成石头或自动换另一个来源。NI、SX 和 ItemLoom 本身不能作为外部提供者，以免重新依赖原插件或递归生成。
 
 保留完整底稿也意味着保留外部插件的识别标记：其监听器可能继续对该物品生效。名称和属性由 ItemLoom 覆盖，并不取消外部插件的行为。各提供者版本仍须按实际环境验证。
+
+## 装备对比
+
+安装 PlaceholderAPI 后，ItemLoom 注册 `%itemloom_*%` 与兼容别名 `%gearcompare_*%`。查看者的装备、基础值和候选物品在主线程生成不可变快照；发包线程只读快照，不读取实时库存。需要按查看者重解析 Lore 时，使用 CraftEngine 的 `<papi:...:>` 标签。直接在生成时解析一次 `%...%` 不会自动变成动态 Tooltip。
+
+```text
+%itemloom_head_power_12.5_abcdefgh%
+%itemloom_equipped_head_abcdefgh%
+%itemloom_bar_head_power_12.5_5_15_abcdefgh%
+```
+
+格式依次为：`部位_属性_数值_uid`、`equipped_部位_uid`、`bar_部位_属性_数值_下限_上限_uid`。UID 接受 1–32 位小写字母或数字；数值为普通十进制，不接受 NaN、Infinity 或科学计数法。部位可含下划线，属性占位符键使用小写字母、数字或连字符。属性提供者自己的键可含下划线和 `%`，通过配置映射。
+
+比较数据使用字符串 PDC：`itemloom:slot`、`itemloom:uid`、`itemloom:stats`，继续回退读取 `gearcompare:slot|uid|stats`。`stats` 接受 `power=12.5;powerpct=3` 或 JSON 数值对象。相同 UID 显示“已装备”；不同 UID 的差值最多保留两位小数。空槽与缺少某一属性默认按 0 比较，无比较数据的普通物品隐藏输出。
+
+独立的 `comparison.yml` 在首次安装时生成，并随 `/il reload` 一起校验。以下是通用示例，物品与资源由管理员提供：
+
+```yaml
+slots:
+  head: head
+  charm_1: provider
+attributes:
+  power:
+    provider-key: power
+  powerpct:
+    provider-key: 'power%'
+    percent: true
+    base-key: power
+empty-slot: compare
+sweep-ticks: 40
+lower-is-better: []
+format:
+  better: '<green>▲{diff}'
+  worse: '<red>▼{diff}'
+  same: ''
+  same-item: ''
+  equipped: 'Equipped'
+bar:
+  enabled: true
+  up: '<image:example:gain_{from}_{to}>'
+  down: '<image:example:loss_{from}_{to}>'
+  width: 40
+  segment: 4
+  segments: 10
+```
+
+`slots` 值为 `head/chest/legs/feet/mainhand/offhand` 或 `provider`。物品的部位标签必须匹配目标部位。字体/图片 ID、画布宽度与单格 advance 完全由配置指定，不附送素材。条档位按 `round((值−下限)/(上限−下限)×格数)` 钳制，默认与 10 格 Division.js 相同；满值仍由原物品条负责，对比只覆盖差段。数值越小越好的属性反转箭头并隐藏差段。创造模式更新快照时保留客户端光标，不强制重发整包库存。
+
+百分比值按看者的原始基础合计折算：`基础值 × 百分比 / 100`。当候选物品数据完整时，同类固定值和百分比合成总贡献进行箭头比较；差段仍比较该词条在其自身范围内的位置。同类通过固定值的 `provider-key` 与百分比的 `base-key` 关联，重复别名不重复计数。无基础来源提供者时，百分比比较隐藏。
+
+生成完成后自动登记候选，不重复 roll 或生成事件；候选值立即加入已存在的查看者快照，首次发包可读取完整结果。库存、当前 GUI 和光标的候选也在主线程刷新。缓存有界（全局 512 件、每查看者 128 件），超出缓存或外部物品未登记且不在库存/GUI 时，旧占位符仍按传入的单条值比较。直接调用 `compare(viewer,item,parameters)` 可提供完整上下文；调用方也可先 `registerComparisonCandidate(viewer,item)`。在 `ItemGenerateEvent` 尚未完成时自行提前发包，仍可能缺少最终候选值。
+
+`registerEquipmentProvider(owner, EquipmentProvider)` 返回 `ProviderRegistration`。函数式 `equipment(Player)` 返回其负责的部位；`eligible(Player,String,ItemStack)` 默认 true，所有提供者都会参与每件装备的有效性判断，任一 false 即排除。提供者只能覆盖配置为 `provider` 的部位，不能覆盖原版读取位置。
+
+`registerComparisonStatProvider(owner, ComparisonStatProvider)` 接受函数式 `stats(Player,String,ItemStack)`：null 回退物品 PDC，空 map 明确表示无属性，最新注册且非 null 的提供者优先；`base(Player)` 提供未经百分比放大的基础值。每个 owner 在各注册表最多注册一次，关闭句柄幂等，owner 停用或 ItemLoom 关闭时自动清理。注册、关闭、读取与直接比较都要求主线程。提供者自身数据改变后调用 `refreshComparison(Player)`，下一 tick 更新快照；安全扫描兜底。快照不变时不重发库存。
+
+## CraftEngine 外部来源
+
+CraftEngine 26.9.1 提供公开 `ItemSource` 注册接口。安装该可选插件后，ItemLoom 注册名称为 `ItemLoom` 的来源，可在 CraftEngine 的外部物品配置中使用：
+
+```yaml
+external:
+  plugin: ItemLoom
+  id: ExampleSword
+```
+
+物品 ID 来自 ItemLoom 自有目录；返回完整物品并保留其身份，按 CraftEngine 的上下文传递查看者。未找到 ID 返回空结果，生成错误仍报错。来源注册失败会在日志明确报告。适配器使用公开接口的反射边界，不打包 CraftEngine 类；CraftEngine 没有公开注销方法，因此停用 ItemLoom 后来源变为不生成物品的空提供者，直到 CraftEngine 停止。热替换 CraftEngine 不在支持范围。该来源与前述把 CraftEngine 物品作为 ItemLoom 底稿的入口分别使用。
 
 ## 管理命令
 

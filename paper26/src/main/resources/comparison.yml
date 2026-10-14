@@ -1,0 +1,33 @@
+# Main-thread snapshots are read safely by packet-thread placeholders.
+# Values name vanilla equipment positions, or "provider" for a registered custom slot.
+slots:
+  head: head
+  chest: chest
+  legs: legs
+  feet: feet
+  mainhand: mainhand
+  offhand: offhand
+
+# Tooltip keys may map to a stat provider's public keys.
+# Example: powerpct: {provider-key: 'power%', percent: true, base-key: power}
+# Percentage values are converted using the viewer's raw base total / 100.
+attributes: {}
+empty-slot: compare
+sweep-ticks: 40
+lower-is-better: []
+format:
+  better: '<#6FDC6F>▲{diff}'
+  worse: '<#FF6B6B>▼{diff}'
+  same: ''
+  same-item: ''
+  equipped: 'Equipped'
+
+# Configure your own font/image tags and matching glyph advances.
+# No artwork is bundled. Segment letters are a=0, b=1, ..., k=10.
+bar:
+  enabled: false
+  up: ''
+  down: ''
+  width: 40
+  segment: 4
+  segments: 10

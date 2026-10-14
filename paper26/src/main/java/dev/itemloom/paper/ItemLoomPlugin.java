@@ -5,6 +5,8 @@ import dev.itemloom.paper.command.ItemCommands;
 import dev.itemloom.paper.integration.MythicDrops;
 import dev.itemloom.paper.integration.NiPapiExpansion;
 import dev.itemloom.paper.integration.PapiBridge;
+import dev.itemloom.paper.integration.ComparisonExpansion;
+import dev.itemloom.paper.integration.CraftEngineSource;
 import dev.keystone.Keystone;
 import dev.keystone.storage.StorageWriter;
 import java.nio.file.Files;
@@ -21,6 +23,8 @@ public final class ItemLoomPlugin extends JavaPlugin {
     private ItemCommands commands;
     private AutoCloseable mythic;
     private Runnable closePlaceholders;
+    private Runnable closeComparisonPlaceholders;
+    private AutoCloseable craftEngine;
     private boolean stopped;
 
     @Override
@@ -52,6 +56,8 @@ public final class ItemLoomPlugin extends JavaPlugin {
                 Bukkit.getPluginManager().disablePlugin(this);
                 return;
             }
+            if (papi) closeComparisonPlaceholders = ComparisonExpansion.install(this, items);
+            craftEngine = CraftEngineSource.install(this, items);
             Bukkit.getServicesManager()
                     .register(ItemLoom.class, items, this, ServicePriority.Normal);
             mythic = MythicDrops.install(this, items);
@@ -77,6 +83,12 @@ public final class ItemLoomPlugin extends JavaPlugin {
             Bukkit.getServicesManager().unregisterAll(this);
             Bukkit.getScheduler().cancelTasks(this);
             close(mythic, "Mythic integration");
+            close(craftEngine, "CraftEngine item source");
+            craftEngine = null;
+            if (closeComparisonPlaceholders != null) {
+                closeComparisonPlaceholders.run();
+                closeComparisonPlaceholders = null;
+            }
             mythic = null;
             if (closePlaceholders != null) {
                 try {

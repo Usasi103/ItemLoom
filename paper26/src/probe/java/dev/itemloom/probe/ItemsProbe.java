@@ -36,6 +36,8 @@ public final class ItemsProbe extends JavaPlugin {
             try {
                 result =
                         switch (mode) {
+                            case "equipment-comparison" ->
+                                    CompletableFuture.completedFuture(ComparisonProbe.run(this));
                             case "source-replacement" ->
                                     CompletableFuture.completedFuture(
                                             SourceReplacementProbe.run(this));
