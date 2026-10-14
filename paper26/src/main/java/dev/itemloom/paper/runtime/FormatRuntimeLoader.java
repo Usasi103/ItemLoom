@@ -234,6 +234,12 @@ public final class FormatRuntimeLoader implements RuntimeLoader {
                                 String id, OfflinePlayer viewer, Map<String, String> rolls) {
                             return ni.generate(id, viewer, rolls, false);
                         }
+
+                        @Override
+                        public ItemStack protectRebuild(
+                                String id, ItemStack before, ItemStack generated) {
+                            return ni.items().protectRebuild(id, before, generated);
+                        }
                     };
             ItemPublication secondaryPublication = new ItemPublication(new Object(), sx.ids());
             ItemDefinitions secondary =
@@ -247,6 +253,12 @@ public final class FormatRuntimeLoader implements RuntimeLoader {
                         public ItemStack create(
                                 String id, OfflinePlayer viewer, Map<String, String> rolls) {
                             return sx.generate(id, viewer, rolls);
+                        }
+
+                        @Override
+                        public ItemStack protectRebuild(
+                                String id, ItemStack before, ItemStack generated) {
+                            return sx.protectRebuild(id, before, generated);
                         }
                     };
             PackAccess packs =

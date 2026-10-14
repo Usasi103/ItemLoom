@@ -245,6 +245,22 @@ public final class SxCatalog implements AutoCloseable {
         return true;
     }
 
+    /**
+     * Applies this recipe's ProtectNBT to a rebuild replacement, restoring the original's values
+     * (or their absence) for every protected path, the same restore that {@link #update} performs.
+     */
+    public ItemStack protectRebuild(String id, ItemStack before, ItemStack candidate) {
+        ItemsService.requireThread();
+        ensureActive();
+        SxPaperRecipe recipe = recipes.get(id);
+        if (recipe == null) {
+            throw new IllegalArgumentException("Unknown SX item: " + id);
+        }
+        ItemStack sized = candidate.clone();
+        sized.setAmount(before.getAmount());
+        return SxProtectedState.restore(before, sized, recipe.protectedPaths);
+    }
+
     private void ensureActive() {
         if (!active) {
             throw new IllegalStateException("SX catalog is closed");

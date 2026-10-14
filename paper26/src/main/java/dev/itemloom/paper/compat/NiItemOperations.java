@@ -2,12 +2,14 @@ package dev.itemloom.paper.compat;
 
 import dev.itemloom.compat.ni.action.*;
 import dev.itemloom.compat.ni.script.LegacyConfigReader;
+import dev.itemloom.core.RebuildRules;
 import dev.itemloom.paper.compat.nbt.LegacyNbt;
 import dev.itemloom.paper.compat.script.*;
 import dev.itemloom.paper.nms.NmsItems;
 import java.util.*;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
@@ -17,6 +19,10 @@ import org.bukkit.inventory.ItemStack;
 
 /** Prepares replacements off the live stack and commits after the last callback fence. */
 public final class NiItemOperations {
+    private static final String[][] NUMERIC_STATE = {
+        {"durability", "maxDurability"}, {"charge", "maxCharge"}
+    };
+
     private final NiCatalog catalog;
     private final NiItemMigration migration = new NiItemMigration();
 
@@ -98,6 +104,59 @@ public final class NiItemOperations {
         if (generated == null) return true;
         commit(item, before, replacement(before, old, generated, protectedPaths, null));
         return true;
+    }
+
+    /**
+     * Applies the NI protections to a fresh generation for a rebuild of {@code before}: the
+     * generator's protected NBT and components, and the custom durability and charge of the
+     * original clamped to the generated maximum. The lists are read without the update switch,
+     * because a rebuild is an explicit request. The caller applies amount, enchantments and PDC.
+     */
+    public ItemStack protectRebuild(String id, ItemStack before, ItemStack generated) {
+        ensureActive();
+        LegacyItemGenerator generator = catalog.registry().generators().get(id);
+        LegacyItemInfo old = LegacyItemInfo.inspect(before);
+        if (generator == null || old == null) {
+            throw new IllegalArgumentException("Not an NI item: " + id);
+        }
+        CompoundTag stored = NiItemNodes.legacyData(before);
+        LegacyNbt.Compound nbt = new LegacyNbt.Compound(NiItemNodes.legacyData(generated));
+        for (String path : generator.getRebuildProtectNBT()) {
+            LegacyNbt value = old.getItemTag().getDeep(path);
+            if (value != null) nbt.putDeep(path, value.clone());
+        }
+        CompoundTag data = nbt.copyTag();
+        carryNumericState(stored.getCompoundOrEmpty("NeigeItems"), data);
+        ItemStack prepared = NmsItems.withCustomData(generated, migration.convert(data));
+        var source = CraftItemStack.asNMSCopy(before);
+        var target = CraftItemStack.asNMSCopy(prepared);
+        for (String key : generator.getRebuildProtectComponents()) {
+            Identifier componentId = key == null ? null : Identifier.tryParse(key);
+            DataComponentType<?> type =
+                    componentId == null
+                            ? null
+                            : BuiltInRegistries.DATA_COMPONENT_TYPE.getValue(componentId);
+            if (type != null) copyComponent(source, target, type);
+        }
+        return CraftItemStack.asBukkitCopy(target);
+    }
+
+    /**
+     * Carries the original custom durability and charge onto the generated NI state. A value is
+     * clamped to the generated maximum; with no generated maximum the value is dropped, since
+     * maintenance cannot use a state without one.
+     */
+    private static void carryNumericState(CompoundTag source, CompoundTag data) {
+        CompoundTag destination = data.getCompound("NeigeItems").orElse(null);
+        if (destination == null) return;
+        for (String[] pair : NUMERIC_STATE) {
+            var value = source.getInt(pair[0]);
+            if (value.isEmpty()) continue;
+            Integer kept =
+                    RebuildRules.keptState(value.get(), destination.getInt(pair[1]).orElse(null));
+            if (kept == null) destination.remove(pair[0]);
+            else destination.putInt(pair[0], kept);
+        }
     }
 
     public boolean refresh(

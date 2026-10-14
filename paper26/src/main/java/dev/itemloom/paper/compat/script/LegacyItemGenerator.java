@@ -93,6 +93,22 @@ public final class LegacyItemGenerator {
         return getUpdate() ? definition().strings("options.update.protect-components") : List.of();
     }
 
+    /**
+     * NBT paths a rebuild keeps from the original item. Unlike update, not gated by the update
+     * switch.
+     */
+    public List<String> getRebuildProtectNBT() {
+        return definition().strings("options.update.protect");
+    }
+
+    /**
+     * Components a rebuild keeps from the original item. Unlike update, not gated by the update
+     * switch.
+     */
+    public List<String> getRebuildProtectComponents() {
+        return definition().strings("options.update.protect-components");
+    }
+
     public List<String> getRefreshData() {
         return getUpdate() ? definition().strings("options.update.refresh") : List.of();
     }

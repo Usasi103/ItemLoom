@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
-  "version": "2.6.1",
-  "review_date": "2026-10-12",
+  "version": "2.7.0",
+  "review_date": "2026-10-14",
   "baseline_commit": "03f5da3945c22f6ae9aa504abd7b8365bbbea06c",
   "baseline_project_files_reviewed": 152,
   "scope": "All own production Java implementations, individually retained minimal public API contracts, attributed vendored sources, production resources, maintained build/release tools and legal inputs.",
@@ -247,6 +247,11 @@
       "reason": "Recreate the platform-independent generation function declaration used by catalogs and the public provider API.",
       "sha256_lf": "aae3155955ff2ce6634129a8fbc6ce4db97257985f2d085fe78720e573dd9653"
     },
+    "core/src/main/java/dev/itemloom/core/RebuildRules.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Pure rebuild rules shared by the Bukkit layer and tests: custom durability clamp and the requested-roll carry check.",
+      "sha256_lf": "f6921a053fe62780ebf02db51151c911f83f381a3cc694b8ae5e02b38d170adf"
+    },
     "paper26/src/main/java/dev/itemloom/api/ItemActionEvent.java": {
       "classification": "A",
       "reason": "Bukkit Event/Cancellable/HandlerList template with ItemLoom trigger key, nullable async constructor boundary for adapters. Getter and cancellation boilerplate is standard API mechanics.",
@@ -269,13 +274,18 @@
     },
     "paper26/src/main/java/dev/itemloom/api/ItemLoom.java": {
       "classification": "A",
-      "reason": "Own ServicesManager-facing API, providers/groups/save/identity contracts. No promise of arbitrary NI/SX Java API; interfaces contain no substantial implementation.",
-      "sha256_lf": "ac2267ed250f7dc604b84df05a7a142fd190ad933ba8b6a41bba477d07f77170"
+      "reason": "Own ServicesManager-facing API, providers/groups/save/identity contracts. No promise of arbitrary NI/SX Java API; interfaces contain no substantial implementation. 2.7.0 adds rebuild(item, viewer, overrides, keepPdcKeys) and the KEEP_ALL_PDC constant.",
+      "sha256_lf": "eb9e9e8ec301bec5272cf0b4a42824f8f80d33918ccb0b055c5db163a0c525fc"
     },
     "paper26/src/main/java/dev/itemloom/api/ItemProvider.java": {
       "classification": "A",
       "reason": "Record validates ownership with defensive snapshots of items and group member lists. Generic API collection mechanics, not a source-specific algorithm.",
       "sha256_lf": "3a415eabfee2cbaa27a3323ba4f099c37b44534335d9507ca5ef4232c5b52b26"
+    },
+    "paper26/src/main/java/dev/itemloom/api/ItemRebuildResult.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "New public result carrier for ItemLoom.rebuild: status, a defensive item clone and a message. Written for 2.7.0; not a retained contract.",
+      "sha256_lf": "0ce999d218c0194dafde5e202dad3fc034fa2c7b1f833d9c081c1327120c5c4f"
     },
     "paper26/src/main/java/dev/itemloom/api/ItemsReloadEvent.java": {
       "classification": "A",
@@ -299,8 +309,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/ItemsService.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace combined catalog preparation/publication, provider collision fences and service-lifetime player/return state using typed runtime capabilities.",
-      "sha256_lf": "2bf5f53368105c739cf12aa870077ca6c5cedd145b2712283f6e0bb2bf536a80"
+      "reason": "Replace combined catalog preparation/publication, provider collision fences and service-lifetime player/return state using typed runtime capabilities. 2.7.0 adds the rebuild entry point with identity, provider, owner and post-generation checks.",
+      "sha256_lf": "342e4fa54176384b340af084cf1067f78d6a7a2efab363c6549abb6e86bc4a83"
     },
     "paper26/src/main/java/dev/itemloom/paper/action/ActionInputCapture.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -339,8 +349,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/action/ItemDurabilityService.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace custom/native damage integration, TNT handling, broken callbacks and detached remainder delivery.",
-      "sha256_lf": "e56e7bb154391b503f40b6682c3b3fcbb95b235e3b71e66a205c6a98dc1bdb6c"
+      "reason": "Replace custom/native damage integration, TNT handling, broken callbacks and detached remainder delivery. 2.7.0 exposes editorDamage for the rebuild damage carry-over.",
+      "sha256_lf": "b99db5e4f5abde08aa9f63be245e25211d98d16e73062707d8bc6ee00b4ff66c"
     },
     "paper26/src/main/java/dev/itemloom/paper/action/ItemInventoryActions.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -464,8 +474,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/NiItemOperations.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace rebuild/refresh/update orchestration and preserved-state commits with revision/source checks and original event timing.",
-      "sha256_lf": "5d64d76411e0aba00e6ad1df7a6de7e623fa99d24325df839b5a8f81ec7d1018"
+      "reason": "Replace rebuild/refresh/update orchestration and preserved-state commits with revision/source checks and original event timing. 2.7.0 adds protectRebuild, which applies generator protections and clamped NI durability/charge carry-over.",
+      "sha256_lf": "222faa5ca7f0b699f70489f07d4e5a70220b7be1f02682248172221f0d9495b7"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/NiItemRegistry.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -599,8 +609,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemGenerator.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace the script recipe facade, retaining fixed compiled fields, live sections, metadata and generation delegation.",
-      "sha256_lf": "51ef1f2c3ebf96f3c6e58b2de3ea79e9b1a5abd93e648163c4a6b8c55ea9f216"
+      "reason": "Replace the script recipe facade, retaining fixed compiled fields, live sections, metadata and generation delegation. 2.7.0 adds rebuild protect getters that are not gated by the update switch.",
+      "sha256_lf": "3ac1bd804dfa72b462a587bd5ecb8a5b2e5fa55e550d18a7bf1a31b5b2b0cae7"
     },
     "paper26/src/main/java/dev/itemloom/paper/compat/script/LegacyItemInfo.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -774,8 +784,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/runtime/FormatRuntimeLoader.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Keep the single composition point that reads original NI/SX configurations and adapts them to service capabilities.",
-      "sha256_lf": "34ef498adf3909640bec76de2edfd0530e3f2d65c1b20296c2894562e04024a0"
+      "reason": "Keep the single composition point that reads original NI/SX configurations and adapts them to service capabilities. 2.7.0 wires the per-format rebuild protection.",
+      "sha256_lf": "4220547783e4b19528990508fde033891f96eb10cf7b6db55da8625dc007c3a0"
     },
     "paper26/src/main/java/dev/itemloom/paper/runtime/FunctionAccess.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -789,8 +799,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/runtime/ItemDefinitions.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Keep item publication/generation capability used by ItemsService, persistence and format composition.",
-      "sha256_lf": "cc95bebf588f02adfcb2bfcdace27dbb337ec777ae8a739c95108a7ebb3300a1"
+      "reason": "Keep item publication/generation capability used by ItemsService, persistence and format composition. 2.7.0 adds a default protectRebuild hook.",
+      "sha256_lf": "d7b5708a9f5924f7d0b79b1db989fcb24cf418fe407c87e2eb69bd7e7309e180"
     },
     "paper26/src/main/java/dev/itemloom/paper/runtime/ItemPersistence.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -801,6 +811,11 @@
       "classification": "contract-replacement-or-reviewed-integration",
       "reason": "Keep an immutable ID/token snapshot for generation and administration fences.",
       "sha256_lf": "7de9c341bbc58b65d67397231aee5076b703f6ef2095a57c083aecfd726d3b82"
+    },
+    "paper26/src/main/java/dev/itemloom/paper/runtime/ItemRebuilds.java": {
+      "classification": "contract-replacement-or-reviewed-integration",
+      "reason": "Rebuild rules over the format hooks: identity rejection, roll merge, PDC keep rules and enchantment/vanilla-damage carry-over for the 2.7.0 rebuild API.",
+      "sha256_lf": "0627c3376ceae1fab854729c21c8f33eab0e72a0e3d274d0494d70596ad205cb"
     },
     "paper26/src/main/java/dev/itemloom/paper/runtime/MaintenanceAccess.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -874,8 +889,8 @@
     },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxCatalog.java": {
       "classification": "contract-replacement-or-reviewed-integration",
-      "reason": "Replace alias resolution, revision scripts, item/update publication and protected component commits over direct SX definitions.",
-      "sha256_lf": "4866e6a72f8defceaabde29c80b77818124a390dc2bd29d593a99bfed4b19216"
+      "reason": "Replace alias resolution, revision scripts, item/update publication and protected component commits over direct SX definitions. 2.7.0 adds protectRebuild with the same ProtectNBT restore as update.",
+      "sha256_lf": "646a2830b27f5d1cd34711992de5619c9370b200c3f422bc4472043e18cd96d0"
     },
     "paper26/src/main/java/dev/itemloom/paper/sx/SxFieldPlan.java": {
       "classification": "contract-replacement-or-reviewed-integration",
@@ -1126,8 +1141,8 @@
     },
     "gradle.properties": {
       "classification": "reviewed-build-resource-or-audit-input",
-      "reason": "Select the formal 2.6.1 documentation release without changing the reviewed toolchain or runtime dependencies.",
-      "sha256_lf": "aa00133cb6e00b012e73d8c38533caad4cc848be43e5620ebd8fb101b2a55a4c"
+      "reason": "Select the formal 2.7.0 release without changing the reviewed toolchain or runtime dependencies.",
+      "sha256_lf": "7f3e93176b7e7af1461552acd84d078dde89d43dee4cb9688bb8f2aec94a99d6"
     },
     "gradle/wrapper/gradle-wrapper.jar": {
       "classification": "retained-build-bootstrap",

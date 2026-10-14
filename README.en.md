@@ -102,7 +102,7 @@ Define `example:blade` in CraftEngine first. ItemLoom preserves components, PDC,
 
 ## Documentation and development
 
-Developers obtain `dev.itemloom.api.ItemLoom` through Bukkit's ServicesManager to generate items, register providers, and subscribe to events. API examples are in [USAGE](USAGE.md).
+Developers obtain `dev.itemloom.api.ItemLoom` through Bukkit's ServicesManager to generate items, register providers, and subscribe to events. Since 2.7.0 they can also rebuild an existing item with replaced roll values. API examples and the rebuild interface are described in [USAGE](USAGE.md), written in Chinese.
 
 | Document | Contents |
 |---|---|

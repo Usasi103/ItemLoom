@@ -1,6 +1,6 @@
 # ItemLoom 使用说明
 
-适用于 `2.6.1`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
+适用于 `2.7.0`，目标 Paper 26.2 / Java 25。入门见 [README](README.md)，构建见 [BUILDING](BUILDING.md)，当前验收缺口见 [IMPLEMENTATION](IMPLEMENTATION.md)。
 
 集合节点的随机实现保留权重、重复项及缓存规则，但不保证同一个随机种子的逐次结果与旧版本相同。已保存的锁定随机值仍按原配置规则读取。
 
@@ -228,6 +228,34 @@ registration.close();
 - `save(item,id,path,replace)` 返回独立 `ItemLoom.SaveResult`，复用安全保存路径；不会覆盖外部 provider 的 ID。只有调用方明确传 `replace=true` 才允许覆盖配置物品。
 - `ItemsReloadEvent` 仅在完整配置成功安装后触发，提供 revision 和 initial 标志；失败不触发，不覆盖旧脚本局部目录 reload。监听器内不得递归执行完整 reload。初次加载的事件早于服务注册，调用方应在自身 enable 时获取服务和当前目录。
 - 生成、注册、保存、关闭句柄和 live Bukkit 操作要求主线程。`ids/groupIds` 返回不可变集合。原来的 `%ni_*%` 异步读取规则保持不变。
+
+### 重建已有物品
+
+`rebuild(item, viewer, overrides, keepPdcKeys)` 按覆盖的节点值重建一件已有的 ItemLoom 物品，例如在强化或培养后刷新 Lore 数值。它返回 `ItemRebuildResult`，成功时 `rebuilt()` 为真且 `item()` 给出新物品，失败时 `status()` 与 `message()` 说明原因。原物品在成功和失败时都不被修改，调用方决定是否替换它。
+
+```java
+ItemLoom api = Bukkit.getServicesManager().load(ItemLoom.class);
+
+ItemRebuildResult result =
+        api.rebuild(
+                sword,
+                player,
+                Map.of("quality", "rare"),          // 覆盖的节点值；null 值表示移除该节点，下次重新计算
+                Set.of("examplemod:data"));         // 要从原物品保留的 PDC 键
+if (result.rebuilt()) {
+    player.getInventory().setItemInMainHand(result.item().orElseThrow());
+} else {
+    getLogger().warning("rebuild failed: " + result.status() + " " + result.message());
+}
+```
+
+- `overrides` 为空或 `null` 时不改变节点；`null` 值会移除该节点的已保存结果，使其在重建时重新计算。未覆盖的节点保持原值，因此无关的随机结果不会变化。
+- 重建保留：数量；NI 自定义耐久与充能（按新定义的上限钳制，新定义没有上限时丢弃）；原版耐久伤害；附魔与存储附魔集合（精确复制，新定义增加的附魔不会应用）；配置的 `options.update.protect` 与 `protect-components` 列表；`keepPdcKeys` 指定的 PDC 键。未列出的 PDC 键来自新定义生成的结果，因此调用方必须列出自己需要的每个键。
+- 需要保留该物品的全部 PDC 时，传入 `Set.of(ItemLoom.KEEP_ALL_PDC)`。NI 的 `PublicBukkitValues` 保护路径即是这个效果。
+- `ItemGenerateEvent` 在生成时触发一次，监听器可修改 Lore 等内容；上面列出的保留状态随后恢复。
+- 身份用 `api.identify(item)` 读取：返回的 `ItemIdentity` 包含 ID 与当前节点值。非 ItemLoom 物品返回 `NOT_ITEMLOOM`，ID 未在当前配置中定义时返回 `UNKNOWN_ID`，`null` 键返回 `INVALID_ARGUMENT`。
+- 外部提供者物品返回 `UNSUPPORTED_FORMAT`；服务未加载或已关闭返回 `UNAVAILABLE`。
+- 调用线程须为服务器主线程；在其他线程调用会抛出 `IllegalStateException`。其余失败都以结果返回，不抛出异常。
 
 ## 战利品袋
 

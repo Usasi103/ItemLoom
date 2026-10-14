@@ -329,7 +329,8 @@ public final class ItemDurabilityService implements Listener, AutoCloseable {
         NmsItems.replace(item, CraftItemStack.asCraftMirror(copy));
     }
 
-    private static int editorDamage(int ordinary, int remaining, int maximum) {
+    /** Vanilla damage that displays {@code remaining} of {@code maximum} custom durability. */
+    public static int editorDamage(int ordinary, int remaining, int maximum) {
         short quantized = (short) (int) (ordinary * (1.0 - (double) remaining / maximum));
         int display = remaining < maximum && quantized <= 0 ? 1 : quantized;
         return remaining > 0 && display >= ordinary ? (short) (display - 1) : display;

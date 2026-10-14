@@ -2,11 +2,13 @@ package dev.itemloom.paper;
 
 import dev.itemloom.api.ItemLoom;
 import dev.itemloom.api.ItemProvider;
+import dev.itemloom.api.ItemRebuildResult;
 import dev.itemloom.api.ItemsReloadEvent;
 import dev.itemloom.api.ProviderRegistration;
 import dev.itemloom.core.ActionFlow;
 import dev.itemloom.core.GenerationBudget;
 import dev.itemloom.core.ItemIdentity;
+import dev.itemloom.core.RebuildRules;
 import dev.itemloom.paper.action.DropOwnership;
 import dev.itemloom.paper.action.DropVisibility;
 import dev.itemloom.paper.action.ItemUseRestrictions;
@@ -18,6 +20,7 @@ import dev.itemloom.paper.nms.ItemStateCodec;
 import dev.itemloom.paper.runtime.DropOwnershipPolicy;
 import dev.itemloom.paper.runtime.FormatRuntimeLoader;
 import dev.itemloom.paper.runtime.ItemDefinitions;
+import dev.itemloom.paper.runtime.ItemRebuilds;
 import dev.itemloom.paper.runtime.PreparedRuntime;
 import dev.itemloom.paper.runtime.RuntimeEventRouter;
 import dev.itemloom.paper.runtime.RuntimeLoader;
@@ -443,6 +446,131 @@ public final class ItemsService implements ItemLoom, AutoCloseable, Listener {
             return original.clone();
         }
         return FormatRuntimeLoader.migrate(original);
+    }
+
+    @Override
+    public ItemRebuildResult rebuild(
+            ItemStack item,
+            OfflinePlayer viewer,
+            Map<String, String> overrides,
+            Set<String> keepPdcKeys) {
+        requireThread();
+        RuntimeSnapshot captured = current;
+        if (closed || captured == null || !captured.lifecycle().active()) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.UNAVAILABLE, "ItemLoom has no active runtime", null);
+        }
+        if (item == null || item.isEmpty()) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.EMPTY_ITEM, "Item is empty", null);
+        }
+        if (keepPdcKeys != null && keepPdcKeys.stream().anyMatch(Objects::isNull)) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.INVALID_ARGUMENT,
+                    "keepPdcKeys cannot contain null",
+                    null);
+        }
+        Optional<ItemIdentity> found;
+        try {
+            found = identify(item);
+        } catch (RuntimeException unreadable) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.CORRUPT_IDENTITY,
+                    "ItemLoom identity is unreadable",
+                    unreadable);
+        }
+        Optional<ItemRebuildResult> rejected = ItemRebuilds.rejection(found, ids());
+        if (rejected.isPresent()) {
+            return rejected.get();
+        }
+        ItemIdentity old = found.get();
+        if (providers.contains(old.id())) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.UNSUPPORTED_FORMAT,
+                    "Provider items cannot be rebuilt: " + old.id(),
+                    null);
+        }
+        ItemDefinitions owner;
+        try {
+            owner = rebuildOwner(captured, old.id());
+        } catch (IllegalArgumentException conflicting) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.GENERATION_FAILED,
+                    conflicting.getMessage(),
+                    conflicting);
+        }
+        if (owner == null) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.UNKNOWN_ID,
+                    "Item id is not defined: " + old.id(),
+                    null);
+        }
+        Map<String, String> changes = overrides == null ? Map.of() : overrides;
+        Map<String, String> rolls;
+        try {
+            rolls = ItemRebuilds.mergeRolls(old.rolls(), changes);
+        } catch (IllegalArgumentException invalid) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.INVALID_ARGUMENT, invalid.getMessage(), invalid);
+        }
+        ItemStack before = item.clone();
+        ItemStack candidate;
+        try {
+            ItemStack generated = create(old.id(), viewer, rolls);
+            if (generated == null || generated.isEmpty()) {
+                return ItemRebuildResult.failed(
+                        ItemRebuildResult.Status.GENERATION_FAILED,
+                        "Generation produced no item for " + old.id(),
+                        null);
+            }
+            ItemStack protectedItem = owner.protectRebuild(old.id(), before, generated);
+            candidate = ItemRebuilds.preserveRuntime(before, protectedItem, keepPdcKeys);
+            ItemIdentity rebuilt = identify(candidate).orElse(null);
+            if (rebuilt == null || !old.id().equals(rebuilt.id())) {
+                return ItemRebuildResult.failed(
+                        ItemRebuildResult.Status.GENERATION_FAILED,
+                        "Rebuilt item lost its ItemLoom identity: " + old.id(),
+                        null);
+            }
+            String missing = RebuildRules.missingOverride(rebuilt.rolls(), changes);
+            if (missing != null) {
+                return ItemRebuildResult.failed(
+                        ItemRebuildResult.Status.GENERATION_FAILED,
+                        "Rebuilt item does not carry the requested roll: " + missing,
+                        null);
+            }
+        } catch (RuntimeException failure) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.GENERATION_FAILED,
+                    "Could not rebuild " + old.id() + ": " + failure.getMessage(),
+                    failure);
+        }
+        if (closed || current != captured) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.UNAVAILABLE,
+                    "ItemLoom runtime changed during rebuild",
+                    null);
+        }
+        if (!item.equals(before)) {
+            return ItemRebuildResult.failed(
+                    ItemRebuildResult.Status.ITEM_CHANGED,
+                    "Item changed while the rebuild was being prepared",
+                    null);
+        }
+        return ItemRebuildResult.rebuilt(candidate);
+    }
+
+    private static ItemDefinitions rebuildOwner(RuntimeSnapshot captured, String id) {
+        ItemDefinitions selected = null;
+        for (ItemDefinitions format : captured.itemFormats()) {
+            if (format.publication().ids().contains(id)) {
+                if (selected != null) {
+                    throw conflict(id);
+                }
+                selected = format;
+            }
+        }
+        return selected;
     }
 
     private RuntimeSnapshot requireLoaded() {

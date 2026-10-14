@@ -102,7 +102,7 @@ material: 'itembridge:craftengine:example:blade'
 
 ## 文档与开发
 
-开发者可通过 Bukkit ServicesManager 获取 `dev.itemloom.api.ItemLoom`，生成物品、注册自有生成器并订阅事件。接入示例见 [Java API](USAGE.md#独立-java-api)。
+开发者可通过 Bukkit ServicesManager 获取 `dev.itemloom.api.ItemLoom`，生成物品、注册自有生成器并订阅事件；2.7.0 起还可以按覆盖的节点值重建已有物品。接入示例见 [Java API](USAGE.md#独立-java-api)，重建接口见 [重建已有物品](USAGE.md#重建已有物品)。
 
 | 文档 | 内容 |
 |---|---|
